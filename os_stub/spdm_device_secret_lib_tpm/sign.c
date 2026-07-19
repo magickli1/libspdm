@@ -69,6 +69,16 @@ bool libspdm_responder_data_sign(
     void *context = NULL;
     bool result = false;
 
+    /* A restricted IAK is provisioned solely for TPM2 Quote. It must never
+     * sign an SPDM transcript (CHALLENGE, MEASUREMENTS, or KEY_EXCHANGE). */
+    if (key_pair_id == LIBSPDM_TPM_IAK_KEY_PAIR_ID) {
+        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
+                       "refusing SPDM transcript signature with IAK slot\n"));
+        /* Always emit to stderr so emulator CI can assert this failure mode. */
+        fprintf(stderr, "refusing SPDM transcript signature with IAK slot\n");
+        return false;
+    }
+
     libspdm_tpm_device_init();
     result = libspdm_tpm_get_pvt_key_handle(LIBSPDM_TPM_HANDLE_RESPONDER_HANDLE_SLOT_0, &context);
     if (!result){

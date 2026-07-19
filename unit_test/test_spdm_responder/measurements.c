@@ -1575,6 +1575,25 @@ static void rsp_measurements_case27(void **state)
         expect_measurement_record_data,
         &expect_measurement_record_data_length);
 
+#if LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX
+    libspdm_measurement_opaque_data_ex(
+        spdm_context,
+        NULL,
+        spdm_context->connection_info.version,
+        spdm_context->connection_info.algorithm.measurement_spec,
+        spdm_context->connection_info.algorithm.measurement_hash_algo,
+        m_libspdm_get_measurements_request15.header.param2,
+        m_libspdm_get_measurements_request15.header.param1,
+        m_libspdm_get_measurements_request15.nonce,
+        m_libspdm_get_measurements_request15.slot_id_param,
+        0,
+        NULL,
+        expect_measurement_record_data,
+        measurements_count,
+        expect_measurement_record_data_length,
+        expect_opaque_data,
+        &expect_opaque_data_size);
+#else
     libspdm_measurement_opaque_data(
         spdm_context,
         NULL,
@@ -1587,6 +1606,7 @@ static void rsp_measurements_case27(void **state)
         NULL,
         expect_opaque_data,
         &expect_opaque_data_size);
+#endif
 
     measurement_record_data = (uint8_t *)response + sizeof(spdm_measurements_response_t);
     opaque_data_size =

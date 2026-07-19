@@ -217,6 +217,13 @@ bool libspdm_cryptest_main(void)
     }
     #endif /* LIBSPDM_SLH_DSA_SUPPORT */
 
+    #if defined(LIBSPDM_TPM_SUPPORT) && (LIBSPDM_TPM_SUPPORT)
+    status = libspdm_validate_crypt_tpm_quote();
+    if (!status) {
+        return status;
+    }
+    #endif /* LIBSPDM_TPM_SUPPORT */
+
     return status;
 }
 

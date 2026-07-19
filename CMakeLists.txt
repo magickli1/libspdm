@@ -39,6 +39,8 @@ set(X509_IGNORE_CRITICAL ${X509_IGNORE_CRITICAL} CACHE STRING "Choose if libspdm
 set(DEVICE ${DEVICE} CACHE STRING "Choose the test device: sample tpm, and default is sample" FORCE)
 
 option(LIBSPDM_TPM_SUPPORT "Add TPM support in crypt_ext" OFF)
+option(LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX
+       "Use the extended measurement opaque-data callback" OFF)
 
 if(NOT GCOV)
     set(GCOV "OFF")
@@ -232,6 +234,17 @@ if (LIBSPDM_TPM_SUPPORT)
     endif ()
     message(STATUS "crypt_ext tpm supported enabled")
     add_definitions(-DLIBSPDM_TPM_SUPPORT=1)
+    if (NOT DEFINED LIBSPDM_TPM_IAK_BASE_HASH_ALGO)
+        set(LIBSPDM_TPM_IAK_BASE_HASH_ALGO
+            "SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_256"
+            CACHE STRING "SPDM algorithm identifier for IAK Quote signature hash")
+    endif()
+    add_definitions(-DLIBSPDM_TPM_IAK_BASE_HASH_ALGO=${LIBSPDM_TPM_IAK_BASE_HASH_ALGO})
+    set(LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX ON)
+endif()
+
+if (LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX)
+    add_definitions(-DLIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX=1)
 endif()
 
 if (X509_IGNORE_CRITICAL STREQUAL "ON")

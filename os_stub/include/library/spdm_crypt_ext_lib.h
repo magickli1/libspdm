@@ -214,6 +214,71 @@ bool libspdm_tpm_get_pub_key_handle(void *handle, void **context);
 bool libspdm_tpm_read_pcr(uint32_t hash_algo, uint32_t index, void *buffer, size_t *size);
 
 /**
+ * Generate a TPM2 Quote over the selected PCRs.
+ *
+ * The returned buffers contain TSS2-MU encoded TPM2B_ATTEST and TPMT_SIGNATURE
+ * structures. The caller supplies all storage; this function never truncates.
+ *
+ * @param[in]     key_handle       Persistent TPM attestation-key handle.
+ * @param[in]     hash_algo        SPDM measurement hash algorithm / PCR bank.
+ * @param[in]     pcr_mask          Bit mask of PCR indices to quote (PCR 0 is bit 0).
+ * @param[in]     nonce            Qualifying data from GET_MEASUREMENTS.
+ * @param[in]     nonce_size       Size of nonce; must be SPDM_NONCE_SIZE.
+ * @param[in]     pcr_data         Concatenated PCR values in ascending index order.
+ * @param[in]     pcr_data_size    Size of pcr_data.
+ * @param[out]    attest           Encoded TPM2B_ATTEST.
+ * @param[in,out] attest_size      Available/used attest buffer size.
+ * @param[out]    signature        Encoded TPMT_SIGNATURE.
+ * @param[in,out] signature_size   Available/used signature buffer size.
+ *
+ * @retval true   Quote generated and marshalled.
+ * @retval false  Invalid parameters, insufficient output space, or TPM error.
+ */
+bool libspdm_tpm_quote(uint32_t key_handle,
+                       uint32_t hash_algo,
+                       uint32_t pcr_mask,
+                       const uint8_t *nonce,
+                       size_t nonce_size,
+                       const uint8_t *pcr_data,
+                       size_t pcr_data_size,
+                       uint8_t *attest,
+                       size_t *attest_size,
+                       uint8_t *signature,
+                       size_t *signature_size);
+
+/**
+ * Verify a marshalled TPM Quote and its binding to SPDM measurement data.
+ *
+ * @param[in] cert          DER-encoded IAK leaf certificate.
+ * @param[in] cert_size     Size of cert.
+ * @param[in] hash_algo     SPDM measurement hash algorithm / expected PCR bank.
+ * @param[in] pcr_mask      Expected TPM PCR selection.
+ * @param[in] nonce         Expected GET_MEASUREMENTS requester nonce.
+ * @param[in] nonce_size    Size of nonce; must be SPDM_NONCE_SIZE.
+ * @param[in] pcr_data      Concatenated PCR values in ascending index order.
+ * @param[in] pcr_data_size Size of pcr_data.
+ * @param[in] attest        TSS2-MU encoded TPM2B_ATTEST.
+ * @param[in] attest_size   Size of attest.
+ * @param[in] signature     TSS2-MU encoded TPMT_SIGNATURE.
+ * @param[in] signature_size Size of signature.
+ *
+ * @retval true   Quote structure, freshness, PCR digest, and signature are valid.
+ * @retval false  Quote validation failed.
+ */
+bool libspdm_tpm_verify_quote(const uint8_t *cert,
+                              size_t cert_size,
+                              uint32_t hash_algo,
+                              uint32_t pcr_mask,
+                              const uint8_t *nonce,
+                              size_t nonce_size,
+                              const uint8_t *pcr_data,
+                              size_t pcr_data_size,
+                              const uint8_t *attest,
+                              size_t attest_size,
+                              const uint8_t *signature,
+                              size_t signature_size);
+
+/**
  * Read data from a TPM non-volatile (NV) index.
  *
  * This function reads the contents of a specified TPM NV index and returns

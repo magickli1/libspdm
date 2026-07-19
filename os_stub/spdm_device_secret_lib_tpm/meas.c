@@ -19,6 +19,7 @@
 #include "internal/libspdm_device_secret_lib.h"
 #include "library/spdm_crypt_ext_lib.h"
 #include "internal/libspdm_common_lib.h"
+#include "keys.h"
 
 #if (LIBSPDM_ENABLE_CAPABILITY_MEL_CAP) || (LIBSPDM_ENABLE_CAPABILITY_MEAS_CAP)
 
@@ -110,7 +111,7 @@ size_t libspdm_fill_measurement_image_hash_block (
     hash_size = libspdm_get_measurement_hash_size(measurement_hash_algo);
 
     if (use_bit_stream) {
-        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "use_bit_stream for image_hash_block for TMP device is not supported"));
+        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "use_bit_stream for image_hash_block for TPM device is not supported"));
         return 0;
     }
 
@@ -133,7 +134,7 @@ size_t libspdm_fill_measurement_image_hash_block (
                    (uint16_t)hash_size);
 
     buffer = (uint8_t*)(measurement_block + 1);
-    buffer_size = 0;
+    buffer_size = hash_size;
     if (!libspdm_tpm_read_pcr(measurement_hash_algo, measurements_index, buffer, &buffer_size)) {
         LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "failed to read pcr from TPM"));
         return 0;
@@ -612,9 +613,13 @@ successful_return:
     return LIBSPDM_STATUS_SUCCESS;
 }
 
-size_t libspdm_secret_lib_meas_opaque_data_size;
+#define LIBSPDM_TPM_QUOTE_VERSION 1
+#define LIBSPDM_TPM_QUOTE_HEADER_SIZE 6
+#define LIBSPDM_TPM_QUOTE_ATTEST_MAX_SIZE 1024
+#define LIBSPDM_TPM_QUOTE_SIGNATURE_MAX_SIZE 128
+#define LIBSPDM_TPM_QUOTE_MAX_RETRIES 3
 
-bool libspdm_measurement_opaque_data(
+bool libspdm_measurement_opaque_data_ex(
     void *spdm_context,
     const uint32_t *session_id,
     spdm_version_number_t spdm_version,
@@ -622,14 +627,44 @@ bool libspdm_measurement_opaque_data(
     uint32_t measurement_hash_algo,
     uint8_t measurement_index,
     uint8_t request_attribute,
+    const uint8_t *requester_nonce,
+    uint8_t slot_id_param,
     size_t request_context_size,
     const void *request_context,
+    void *measurements,
+    uint8_t measurements_count,
+    size_t measurements_size,
     void *opaque_data,
     size_t *opaque_data_size)
 {
-    size_t index;
+    spdm_general_opaque_data_table_header_t *table_header;
+    spdm_svh_tcg_header_t *element_header;
+    uint8_t *element_data;
+    uint8_t attest[LIBSPDM_TPM_QUOTE_ATTEST_MAX_SIZE];
+    uint8_t signature[LIBSPDM_TPM_QUOTE_SIGNATURE_MAX_SIZE];
+    size_t attest_size;
+    size_t signature_size;
+    size_t element_data_size;
+    size_t element_size;
+    size_t required_size;
+    uint32_t pcr_mask;
+    uint8_t pcr_data[LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER *
+                     LIBSPDM_MAX_HASH_SIZE];
+    size_t pcr_data_size;
+    size_t retry_measurements_size;
+    uint8_t retry_measurements_count;
+    spdm_measurement_block_dmtf_t *measurement_block;
+    size_t measurement_block_size;
+    size_t record_offset;
+    size_t hash_size;
+    uint8_t block_index;
+    uint8_t retry;
+    bool quote_generated;
+    libspdm_return_t status;
 
-    LIBSPDM_ASSERT(libspdm_secret_lib_meas_opaque_data_size <= *opaque_data_size);
+    if (opaque_data_size == NULL) {
+        return false;
+    }
 
     if (g_check_measurement_request_context) {
         if ((spdm_version >> SPDM_VERSION_NUMBER_SHIFT_BIT) >= SPDM_MESSAGE_VERSION_13) {
@@ -641,13 +676,140 @@ bool libspdm_measurement_opaque_data(
         }
     }
 
-    *opaque_data_size = libspdm_secret_lib_meas_opaque_data_size;
-
-    for (index = 0; index < *opaque_data_size; index++)
-    {
-        ((uint8_t *)opaque_data)[index] = (uint8_t)index;
+    /* Quote opaque evidence for signed ALL_MEASUREMENTS and for a single PCR
+     * hash index (1..HASH_NUMBER). Non-PCR indices return empty opaque. */
+    if (((request_attribute &
+          SPDM_GET_MEASUREMENTS_REQUEST_ATTRIBUTES_GENERATE_SIGNATURE) == 0) ||
+        (requester_nonce == NULL) ||
+        ((spdm_version >> SPDM_VERSION_NUMBER_SHIFT_BIT) < SPDM_MESSAGE_VERSION_12) ||
+        (measurement_index ==
+         SPDM_GET_MEASUREMENTS_REQUEST_MEASUREMENT_OPERATION_TOTAL_NUMBER_OF_MEASUREMENTS) ||
+        ((measurement_index !=
+          SPDM_GET_MEASUREMENTS_REQUEST_MEASUREMENT_OPERATION_ALL_MEASUREMENTS) &&
+         ((measurement_index == 0) ||
+          (measurement_index > LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER)))) {
+        *opaque_data_size = 0;
+        return true;
     }
 
+    if ((slot_id_param == LIBSPDM_TPM_IAK_SLOT_ID) || (slot_id_param == 0xF)) {
+        return false;
+    }
+    if ((measurements == NULL) || (measurements_count == 0) ||
+        (measurements_size == 0) || (opaque_data == NULL)) {
+        return false;
+    }
+
+    if (measurement_index ==
+        SPDM_GET_MEASUREMENTS_REQUEST_MEASUREMENT_OPERATION_ALL_MEASUREMENTS) {
+        pcr_mask = (1u << LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER) - 1;
+    } else {
+        pcr_mask = 1u << (measurement_index - 1);
+    }
+
+    hash_size = libspdm_get_measurement_hash_size(measurement_hash_algo);
+    quote_generated = false;
+    for (retry = 0; retry < LIBSPDM_TPM_QUOTE_MAX_RETRIES; retry++) {
+        retry_measurements_size = measurements_size;
+        retry_measurements_count = measurements_count;
+        status = libspdm_measurement_collection(
+            spdm_context, session_id, spdm_version, measurement_specification,
+            measurement_hash_algo, measurement_index, request_attribute,
+            requester_nonce, slot_id_param, request_context_size, request_context,
+            NULL, &retry_measurements_count, measurements,
+            &retry_measurements_size);
+        if (LIBSPDM_STATUS_IS_ERROR(status) ||
+            (retry_measurements_size != measurements_size) ||
+            (retry_measurements_count != measurements_count)) {
+            return false;
+        }
+
+        pcr_data_size = 0;
+        record_offset = 0;
+        measurement_block = measurements;
+        for (block_index = 0; block_index < measurements_count; block_index++) {
+            if (record_offset + sizeof(*measurement_block) > measurements_size) {
+                return false;
+            }
+            measurement_block_size =
+                sizeof(spdm_measurement_block_dmtf_t) +
+                measurement_block->measurement_block_dmtf_header
+                .dmtf_spec_measurement_value_size;
+            if (record_offset + measurement_block_size > measurements_size) {
+                return false;
+            }
+            if ((measurement_block->measurement_block_common_header.index >= 1) &&
+                (measurement_block->measurement_block_common_header.index <=
+                 LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER) &&
+                ((pcr_mask & (1u <<
+                              (measurement_block->measurement_block_common_header.index - 1))) !=
+                 0)) {
+                if ((measurement_block->measurement_block_dmtf_header
+                     .dmtf_spec_measurement_value_type &
+                     SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_RAW_BIT_STREAM) != 0 ||
+                    (measurement_block->measurement_block_dmtf_header
+                     .dmtf_spec_measurement_value_size != hash_size) ||
+                    (pcr_data_size + hash_size > sizeof(pcr_data))) {
+                    return false;
+                }
+                libspdm_copy_mem(&pcr_data[pcr_data_size],
+                                 sizeof(pcr_data) - pcr_data_size,
+                                 measurement_block + 1, hash_size);
+                pcr_data_size += hash_size;
+            }
+            measurement_block = (void *)((uint8_t *)measurement_block +
+                                         measurement_block_size);
+            record_offset += measurement_block_size;
+        }
+        if ((record_offset != measurements_size) || (pcr_data_size == 0)) {
+            return false;
+        }
+
+        attest_size = sizeof(attest);
+        signature_size = sizeof(signature);
+        quote_generated = libspdm_tpm_quote(
+            LIBSPDM_TPM_IAK_HANDLE, measurement_hash_algo, pcr_mask,
+            requester_nonce, SPDM_NONCE_SIZE, pcr_data, pcr_data_size,
+            attest, &attest_size, signature, &signature_size);
+        if (quote_generated) {
+            break;
+        }
+    }
+
+    if (!quote_generated) {
+        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "TPM2 Quote failed\n"));
+        return false;
+    }
+
+    element_data_size = LIBSPDM_TPM_QUOTE_HEADER_SIZE + attest_size + signature_size;
+    element_size = sizeof(*element_header) + sizeof(uint16_t) + element_data_size;
+    element_size = (element_size + 3) & ~(size_t)3;
+    required_size = sizeof(*table_header) + element_size;
+    if ((element_data_size > UINT16_MAX) || (required_size > *opaque_data_size)) {
+        return false;
+    }
+
+    libspdm_zero_mem(opaque_data, required_size);
+    table_header = opaque_data;
+    table_header->total_elements = 1;
+
+    element_header = (void *)(table_header + 1);
+    element_header->header.id = SPDM_REGISTRY_ID_TCG;
+    element_header->header.vendor_id_len = sizeof(element_header->vendor_id);
+    element_header->vendor_id = LIBSPDM_TPM_VENDOR_ID;
+
+    element_data = (uint8_t *)(element_header + 1);
+    libspdm_write_uint16(element_data, (uint16_t)element_data_size);
+    element_data += sizeof(uint16_t);
+    element_data[0] = LIBSPDM_TPM_QUOTE_VERSION;
+    element_data[1] = LIBSPDM_TPM_IAK_SLOT_ID;
+    libspdm_write_uint16(&element_data[2], (uint16_t)attest_size);
+    libspdm_write_uint16(&element_data[4], (uint16_t)signature_size);
+    libspdm_copy_mem(&element_data[LIBSPDM_TPM_QUOTE_HEADER_SIZE],
+                     attest_size + signature_size, attest, attest_size);
+    libspdm_copy_mem(&element_data[LIBSPDM_TPM_QUOTE_HEADER_SIZE + attest_size],
+                     signature_size, signature, signature_size);
+    *opaque_data_size = required_size;
     return true;
 }
 

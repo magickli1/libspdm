@@ -207,4 +207,12 @@ bool libspdm_validate_crypt_slhdsa(void);
  **/
 bool libspdm_validate_crypt_slhdsa_2(void);
 
+/**
+ * Validate TPM Quote verification (vector / mock style, no live TPM).
+ *
+ * @retval  true   Validation succeeded.
+ * @retval  false  Validation failed.
+ **/
+bool libspdm_validate_crypt_tpm_quote(void);
+
 #endif

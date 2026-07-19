@@ -334,18 +334,44 @@ libspdm_return_t libspdm_get_response_measurements(libspdm_context_t *spdm_conte
     } else {
         opaque_data_size = meas_opaque_buffer_size - measurements_size;
 
-        ret = libspdm_measurement_opaque_data(
-            spdm_context,
-            session_id_ptr,
-            spdm_context->connection_info.version,
-            spdm_context->connection_info.algorithm.measurement_spec,
-            spdm_context->connection_info.algorithm.measurement_hash_algo,
-            measurements_index,
-            spdm_request->header.param1,
-            request_context_size,
-            request_context,
-            opaque_data,
-            &opaque_data_size);
+        ret =
+#if LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX
+            libspdm_measurement_opaque_data_ex(
+                spdm_context,
+                session_id_ptr,
+                spdm_context->connection_info.version,
+                spdm_context->connection_info.algorithm.measurement_spec,
+                spdm_context->connection_info.algorithm.measurement_hash_algo,
+                measurements_index,
+                spdm_request->header.param1,
+                ((spdm_request->header.param1 &
+                  SPDM_GET_MEASUREMENTS_REQUEST_ATTRIBUTES_GENERATE_SIGNATURE) != 0) ?
+                spdm_request->nonce : NULL,
+                ((spdm_request->header.param1 &
+                  SPDM_GET_MEASUREMENTS_REQUEST_ATTRIBUTES_GENERATE_SIGNATURE) != 0 &&
+                 spdm_request->header.spdm_version >= SPDM_MESSAGE_VERSION_11) ?
+                (spdm_request->slot_id_param & SPDM_GET_MEASUREMENTS_REQUEST_SLOT_ID_MASK) : 0,
+                request_context_size,
+                request_context,
+                measurements,
+                measurements_count,
+                measurements_size,
+                opaque_data,
+                &opaque_data_size);
+#else
+            libspdm_measurement_opaque_data(
+                spdm_context,
+                session_id_ptr,
+                spdm_context->connection_info.version,
+                spdm_context->connection_info.algorithm.measurement_spec,
+                spdm_context->connection_info.algorithm.measurement_hash_algo,
+                measurements_index,
+                spdm_request->header.param1,
+                request_context_size,
+                request_context,
+                opaque_data,
+                &opaque_data_size);
+#endif
 
         if (!ret) {
             libspdm_reset_message_m(spdm_context, session_info);

@@ -716,3 +716,18 @@ Those images includes all SPDM features. They do not include cryptography librar
 Those images are used for size evaluation. They cannot run in OS environment.
 
 The SPDM features can be controlled by [spdm_lib_config.h](https://github.com/DMTF/libspdm/blob/main/include/library/spdm_lib_config.h).
+
+To exercise the generic extended measurement opaque-data callback with the sample device-secret
+library, configure and run the responder tests with:
+
+```sh
+cmake -S . -B build-opaque-ex -DARCH=x64 -DTOOLCHAIN=GCC \
+  -DTARGET=Debug -DCRYPTO=openssl \
+  -DLIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX=ON
+cmake --build build-opaque-ex --target test_spdm_responder
+build-opaque-ex/bin/test_spdm_responder
+```
+
+The measurement responder tests call `libspdm_measurement_opaque_data_ex()` with the requester
+nonce, selected slot, and collected measurement record. Run the normal configuration without the
+option as a compatibility test for `libspdm_measurement_opaque_data()`.

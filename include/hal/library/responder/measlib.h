@@ -55,7 +55,6 @@
  * @param  request_context_size  The size, in bytes, of request_context.
  * @param  request_context       If spdm_version is greater than 1.2, then it is a pointer to the
  *                               Context field in the request message, else it is NULL and ignore
- *
  * @param  measurements_count
  * When "measurement_index" is zero, returns the total count of
  * measurements available for the device. None of the actual measurements are
@@ -136,6 +135,68 @@ extern bool libspdm_measurement_opaque_data(
     const void *request_context,
     void *opaque_data,
     size_t *opaque_data_size);
+
+#if LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX
+/**
+ * Generates opaque evidence bound to an SPDM MEASUREMENTS response.
+ *
+ * The implementation may use the requester nonce, request context, selected
+ * signing slot, and returned measurement record to generate platform-specific
+ * evidence. For example, a TPM implementation may return a TPM Quote whose
+ * extraData contains the requester nonce and whose PCR digest represents the
+ * measurement record returned in the same response.
+ *
+ * The implementation may refresh measurements to keep the evidence consistent
+ * with the returned measurement record. It must not change measurements_count
+ * or measurements_size.
+ *
+ * @param  spdm_context              A pointer to the SPDM context.
+ * @param  session_id                A pointer to the session ID, or NULL for
+ *                                   an unsecured message.
+ * @param  spdm_version              The negotiated SPDM version.
+ * @param  measurement_specification The negotiated measurement specification.
+ * @param  measurement_hash_algo     The negotiated measurement hash algorithm.
+ * @param  measurement_index         The requested measurement operation or index.
+ * @param  request_attribute         The GET_MEASUREMENTS request attributes.
+ * @param  requester_nonce           The requester nonce when GenerateSignature
+ *                                   is set; otherwise NULL.
+ * @param  slot_id_param             The slot selected for the SPDM transcript
+ *                                   signature.
+ * @param  request_context_size      The size of request_context in bytes.
+ * @param  request_context           The request Context field for SPDM 1.3 or
+ *                                   later; otherwise NULL.
+ * @param  measurements              On input, the collected measurement record.
+ *                                   On output, the record bound to the generated
+ *                                   evidence.
+ * @param  measurements_count        The number of measurement blocks. The
+ *                                   implementation must not change this value.
+ * @param  measurements_size         The measurement record size. The
+ *                                   implementation must not change this value.
+ * @param  opaque_data               A destination buffer for opaque evidence.
+ * @param  opaque_data_size          On input, the capacity of opaque_data. On
+ *                                   output, the generated evidence size.
+ *
+ * @retval true   Evidence was generated, or no evidence is required.
+ * @retval false  Evidence generation failed or the output buffer was too small.
+ **/
+extern bool libspdm_measurement_opaque_data_ex(
+    void *spdm_context,
+    const uint32_t *session_id,
+    spdm_version_number_t spdm_version,
+    uint8_t measurement_specification,
+    uint32_t measurement_hash_algo,
+    uint8_t measurement_index,
+    uint8_t request_attribute,
+    const uint8_t *requester_nonce,
+    uint8_t slot_id_param,
+    size_t request_context_size,
+    const void *request_context,
+    void *measurements,
+    uint8_t measurements_count,
+    size_t measurements_size,
+    void *opaque_data,
+    size_t *opaque_data_size);
+#endif /* LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX */
 
 /**
  * This function calculates the measurement summary hash.

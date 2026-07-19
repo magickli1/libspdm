@@ -284,6 +284,14 @@ Refer to spdm_server_init() in [spdm_responder.c](https://github.com/DMTF/spdm-e
 
    If the Responder supports measurement, implement [measlib](https://github.com/DMTF/libspdm/blob/main/include/library/responder/measlib.h).
 
+   Define `LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX=1` and implement
+   `libspdm_measurement_opaque_data_ex()` when opaque measurement evidence must be bound to the
+   requester nonce or to the measurement record returned in the same response. The original
+   `libspdm_measurement_opaque_data()` callback remains the default for source compatibility.
+   TPM builds enable the extended callback automatically; a TPM implementation can use it to
+   return a Quote whose `extraData` contains the requester nonce and whose PCR digest represents
+   the returned measurement record.
+
    If the Responder supports CSR signing, implement [csrlib](https://github.com/DMTF/libspdm/blob/main/include/library/responder/csrlib.h) in a secure environment.
 
    If the Responder supports certificate chain setting, implement [setcertlib](https://github.com/DMTF/libspdm/blob/main/include/library/responder/setcertlib.h).

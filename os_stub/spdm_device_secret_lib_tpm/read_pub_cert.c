@@ -200,6 +200,116 @@ cleanup_cert:
     return result;
 }
 
+/*
+ * IAK NV stores a TCG-style certificate chain except the root: leaf only, or
+ * intermediate CA(s) then leaf. RootHash comes from a separate root NV index
+ * (LIBSPDM_TPM_IAK_ROOT_CERT_INDEX). No certificate in the IAK NV blob may
+ * byte-match that root. The SPDM CERTIFICATE payload is RootHash || entire
+ * IAK NV blob.
+ */
+static bool get_iak_certificate(uint32_t index, uint32_t base_hash_algo,
+                                void **data, size_t *size, void **hash,
+                                size_t *hash_size)
+{
+    void *cert;
+    size_t cert_size;
+    void *root_cert;
+    size_t root_cert_size;
+    const uint8_t *parsed_cert;
+    size_t parsed_cert_size;
+    const uint8_t *chain_cert;
+    size_t chain_cert_size;
+    size_t consumed;
+    int32_t cert_index;
+    size_t digest_size;
+    size_t cert_chain_size;
+    spdm_cert_chain_t *cert_chain;
+
+    cert = NULL;
+    root_cert = NULL;
+    if (!libspdm_tpm_read_nv(index, &cert, &cert_size) ||
+        !libspdm_tpm_read_nv(LIBSPDM_TPM_IAK_ROOT_CERT_INDEX,
+                             &root_cert, &root_cert_size)) {
+        free(cert);
+        free(root_cert);
+        return false;
+    }
+    if ((cert_size == 0) || (root_cert_size == 0) ||
+        !libspdm_x509_get_cert_from_cert_chain(root_cert, root_cert_size, 0,
+                                               &parsed_cert,
+                                               &parsed_cert_size) ||
+        (parsed_cert_size != root_cert_size)) {
+        free(cert);
+        free(root_cert);
+        return false;
+    }
+
+    /*
+     * Require a contiguous DER sequence that consumes the entire NV blob.
+     * Fail closed if any cert byte-matches the root trust anchor.
+     */
+    consumed = 0;
+    for (cert_index = 0; ; cert_index++) {
+        if (!libspdm_x509_get_cert_from_cert_chain(cert, cert_size, cert_index,
+                                                   &chain_cert,
+                                                   &chain_cert_size)) {
+            break;
+        }
+        if ((chain_cert_size == 0) ||
+            (chain_cert != (const uint8_t *)cert + consumed) ||
+            (consumed + chain_cert_size > cert_size) ||
+            ((chain_cert_size == root_cert_size) &&
+             libspdm_consttime_is_mem_equal(chain_cert, root_cert,
+                                            root_cert_size))) {
+            free(cert);
+            free(root_cert);
+            return false;
+        }
+        consumed += chain_cert_size;
+    }
+    if ((cert_index == 0) || (consumed != cert_size)) {
+        free(cert);
+        free(root_cert);
+        return false;
+    }
+
+    digest_size = libspdm_get_hash_size(base_hash_algo);
+    cert_chain_size = sizeof(*cert_chain) + digest_size + cert_size;
+    if (cert_chain_size > SPDM_MAX_CERTIFICATE_CHAIN_SIZE) {
+        free(cert);
+        free(root_cert);
+        return false;
+    }
+    cert_chain = malloc(cert_chain_size);
+    if (cert_chain == NULL) {
+        free(cert);
+        free(root_cert);
+        return false;
+    }
+    cert_chain->length = (uint32_t)cert_chain_size;
+    if (!libspdm_hash_all(base_hash_algo, root_cert, root_cert_size,
+                          (uint8_t *)(cert_chain + 1))) {
+        free(cert_chain);
+        free(cert);
+        free(root_cert);
+        return false;
+    }
+    libspdm_copy_mem((uint8_t *)(cert_chain + 1) + digest_size,
+                     cert_size, cert, cert_size);
+    free(cert);
+    free(root_cert);
+
+    *data = cert_chain;
+    *size = cert_chain_size;
+    if (hash != NULL) {
+        *hash = cert_chain + 1;
+    }
+    if (hash_size != NULL) {
+        *hash_size = digest_size;
+    }
+    return true;
+}
+
 bool libspdm_read_requester_root_public_certificate(uint32_t base_hash_algo,
                                                     uint16_t base_asym_algo,
                                                     void **data, size_t *size,
@@ -264,6 +374,16 @@ bool libspdm_read_responder_root_public_certificate_slot(uint8_t slot_id,
         LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "unsupported slot_id %d (supported mask: 0x%x)\n",
                        slot_id, LIBSPDM_TPM_RESPONDER_SUPPORTED_SLOT_MASK));
         return false;
+    }
+
+    /*
+     * IAK NV is chain-except-root. The trust anchor for that slot lives in
+     * LIBSPDM_TPM_IAK_ROOT_CERT_INDEX, not cert[0] of the IAK NV blob.
+     */
+    if (slot_id == LIBSPDM_TPM_IAK_SLOT_ID) {
+        return get_root_certificate_from_chain(LIBSPDM_TPM_IAK_ROOT_CERT_INDEX,
+                                               base_hash_algo, base_asym_algo,
+                                               data, size, hash, hash_size);
     }
 
     switch (slot_id) {
@@ -375,8 +495,12 @@ bool libspdm_read_responder_public_certificate_chain_per_slot(
         return false;
     }
 
-    return get_certificate_chain(chain_index, base_hash_algo, base_asym_algo, data, size, hash, hash_size,
-                                 false, true);
+    if (slot_id == LIBSPDM_TPM_IAK_SLOT_ID) {
+        return get_iak_certificate(chain_index, base_hash_algo, data, size,
+                                   hash, hash_size);
+    }
+    return get_certificate_chain(chain_index, base_hash_algo, base_asym_algo,
+                                 data, size, hash, hash_size, false, true);
 }
 
 /*This alias cert chain is partial, from root CA to device certificate CA.*/
