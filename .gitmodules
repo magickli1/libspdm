@@ -1,6 +1,7 @@
 [submodule "os_stub/openssllib/openssl"]
     path = os_stub/openssllib/openssl
-    url = https://github.com/openssl/openssl
+    url = https://github.com/magickli1/openssl
+    branch = openssl-3.5.5-sm
 [submodule "os_stub/mbedtlslib/mbedtls"]
     path = os_stub/mbedtlslib/mbedtls
     url = https://github.com/Mbed-TLS/mbedtls

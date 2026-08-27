@@ -22,6 +22,68 @@
 #include <openssl/param_build.h>
 #include "key_context.h"
 
+static bool sm2_pkey_is_sm2(const EVP_PKEY *pkey)
+{
+    int32_t nid;
+
+    if (pkey == NULL) {
+        return false;
+    }
+    nid = EVP_PKEY_id(pkey);
+    if (nid == EVP_PKEY_KEYMGMT) {
+        nid = OBJ_sn2nid(EVP_PKEY_get0_type_name(pkey));
+    }
+    return nid == EVP_PKEY_SM2;
+}
+
+#if LIBSPDM_SM2_DSA_SUPPORT || LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT
+#define SM2_PUBLIC_SIZE 64
+
+static bool sm2_get_public_key(EVP_PKEY *pkey, uint8_t *public_data,
+                               size_t *public_size)
+{
+    uint8_t encoded[1 + SM2_PUBLIC_SIZE];
+    size_t encoded_size = 0;
+
+    if (pkey == NULL || public_size == NULL ||
+        (public_data == NULL && *public_size != 0)) {
+        return false;
+    }
+    if (EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY,
+                                        encoded, sizeof(encoded),
+                                        &encoded_size) <= 0 ||
+        encoded_size != sizeof(encoded) || encoded[0] != 0x04) {
+        return false;
+    }
+    if (*public_size < SM2_PUBLIC_SIZE) {
+        *public_size = SM2_PUBLIC_SIZE;
+        return false;
+    }
+    *public_size = SM2_PUBLIC_SIZE;
+    if (public_data != NULL) {
+        libspdm_copy_mem(public_data, SM2_PUBLIC_SIZE,
+                         encoded + 1, SM2_PUBLIC_SIZE);
+    }
+    return true;
+}
+
+#endif
+
+#if LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT
+
+typedef struct {
+    libspdm_key_context key_ctx;
+    uint8_t *id_a;
+    size_t id_a_size;
+    uint8_t *id_b;
+    size_t id_b_size;
+    size_t hash_nid;
+    bool initialized;
+    bool initiator;
+} libspdm_sm2_ke_context;
+
+#endif /* LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT */
+
 /**
  * Allocates and Initializes one Shang-Mi2 context for subsequent use.
  *
@@ -148,7 +210,7 @@ bool libspdm_sm2_dsa_set_pub_key(void *sm2_context, const uint8_t *public_key,
     }
 
     pkey = ((libspdm_key_context *)sm2_context)->evp_pkey;
-    if (pkey == NULL || EVP_PKEY_id(pkey) != EVP_PKEY_SM2) {
+    if (!sm2_pkey_is_sm2(pkey)) {
         return false;
     }
 
@@ -211,9 +273,6 @@ bool libspdm_sm2_dsa_get_pub_key(void *sm2_context, uint8_t *public_key,
                                  size_t *public_key_size)
 {
     EVP_PKEY *pkey;
-    uint8_t buffer[65];
-    size_t len = 0;
-    size_t half_size = 32;
 
     if (sm2_context == NULL || public_key_size == NULL) {
         return false;
@@ -224,35 +283,11 @@ bool libspdm_sm2_dsa_get_pub_key(void *sm2_context, uint8_t *public_key,
     }
 
     pkey = ((libspdm_key_context *)sm2_context)->evp_pkey;
-    if (pkey == NULL || EVP_PKEY_id(pkey) != EVP_PKEY_SM2) {
+    if (!sm2_pkey_is_sm2(pkey)) {
         return false;
     }
 
-    if (EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY,
-                                        buffer, sizeof(buffer), &len) <= 0) {
-        return false;
-    }
-
-    /* EVP_PKEY includes an extra leading byte only for the compression format.
-     * Since only the uncompressed format is supported, this byte (always 0x04)
-     * can be safely ignored to maintain compatibility. */
-    if (len < 1 || len - 1 != half_size * 2) {
-        return false;
-    }
-
-    if (*public_key_size < len - 1) {
-        *public_key_size = len - 1;
-        return false;
-    }
-
-    *public_key_size = len - 1;
-    if (public_key != NULL) {
-        /* buffer[0] = 0x04 indicates the uncompressed format (EVP_PKEY uses this as a format ID).
-         * Only the raw key bytes (excluding this prefix) should be copied into public_key. */
-        libspdm_copy_mem(public_key, *public_key_size, buffer + 1, *public_key_size);
-    }
-
-    return true;
+    return sm2_get_public_key(pkey, public_key, public_key_size);
 }
 
 /**
@@ -279,7 +314,7 @@ bool libspdm_sm2_dsa_check_key(const void *sm2_context)
     }
 
     pkey = ((libspdm_key_context *)sm2_context)->evp_pkey;
-    if (pkey == NULL || EVP_PKEY_id(pkey) != EVP_PKEY_SM2) {
+    if (!sm2_pkey_is_sm2(pkey)) {
         return false;
     }
 
@@ -348,7 +383,7 @@ bool libspdm_sm2_dsa_generate_key(void *sm2_context, uint8_t *public_data,
 
     sm2_ctx = (libspdm_key_context *)sm2_context;
     pkey = ((libspdm_key_context *)sm2_context)->evp_pkey;
-    if (pkey == NULL || EVP_PKEY_id(pkey) != EVP_PKEY_SM2) {
+    if (!sm2_pkey_is_sm2(pkey)) {
         return false;
     }
 
@@ -423,8 +458,29 @@ cleanup:
  **/
 void *libspdm_sm2_key_exchange_new_by_nid(size_t nid)
 {
-    /* current openssl only supports ECDH with SM2 curve, but does not support SM2-key-exchange.*/
+#if LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT
+    libspdm_sm2_ke_context *ctx;
+    libspdm_key_context *key_ctx;
+
+    if (nid != LIBSPDM_CRYPTO_NID_SM2_KEY_EXCHANGE_P256) {
+        return NULL;
+    }
+    ctx = calloc(1, sizeof(*ctx));
+    if (ctx == NULL) {
+        return NULL;
+    }
+    key_ctx = libspdm_sm2_dsa_new_by_nid(LIBSPDM_CRYPTO_NID_SM2_DSA_P256);
+    if (key_ctx == NULL) {
+        free(ctx);
+        return NULL;
+    }
+    ctx->key_ctx.evp_pkey = key_ctx->evp_pkey;
+    key_ctx->evp_pkey = NULL;
+    libspdm_sm2_dsa_free(key_ctx);
+    return ctx;
+#else
     return NULL;
+#endif
 }
 
 /**
@@ -435,7 +491,19 @@ void *libspdm_sm2_key_exchange_new_by_nid(size_t nid)
  **/
 void libspdm_sm2_key_exchange_free(void *sm2_context)
 {
-    /* current openssl only supports ECDH with SM2 curve, but does not support SM2-key-exchange.*/
+#if LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT
+    libspdm_sm2_ke_context *ctx = sm2_context;
+
+    if (ctx == NULL) {
+        return;
+    }
+    EVP_PKEY_free(ctx->key_ctx.evp_pkey);
+    free(ctx->id_a);
+    free(ctx->id_b);
+    free(ctx);
+#else
+    (void)sm2_context;
+#endif
 }
 
 /**
@@ -459,8 +527,42 @@ bool libspdm_sm2_key_exchange_init(const void *sm2_context, size_t hash_nid,
                                    const uint8_t *id_b, size_t id_b_size,
                                    bool is_initiator)
 {
-    /* current openssl only supports ECDH with SM2 curve, but does not support SM2-key-exchange.*/
+#if LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT
+    libspdm_sm2_ke_context *ctx = (libspdm_sm2_ke_context *)sm2_context;
+    uint8_t *new_a = NULL;
+    uint8_t *new_b = NULL;
+
+    if (ctx == NULL || hash_nid != LIBSPDM_CRYPTO_NID_SM3_256 ||
+        id_a == NULL || id_b == NULL || id_a_size == 0 || id_b_size == 0 ||
+        id_a_size > 8191 || id_b_size > 8191) {
+        return false;
+    }
+    new_a = malloc(id_a_size);
+    if (new_a == NULL) {
+        return false;
+    }
+    libspdm_copy_mem(new_a, id_a_size, id_a, id_a_size);
+    new_b = malloc(id_b_size);
+    if (new_b == NULL) {
+        free(new_a);
+        return false;
+    }
+    libspdm_copy_mem(new_b, id_b_size, id_b, id_b_size);
+    free(ctx->id_a);
+    free(ctx->id_b);
+    ctx->id_a = new_a;
+    ctx->id_a_size = id_a_size;
+    ctx->id_b = new_b;
+    ctx->id_b_size = id_b_size;
+    ctx->hash_nid = hash_nid;
+    ctx->initiator = is_initiator;
+    ctx->initialized = true;
+    return true;
+#else
+    (void)sm2_context; (void)hash_nid; (void)id_a; (void)id_a_size;
+    (void)id_b; (void)id_b_size; (void)is_initiator;
     return false;
+#endif
 }
 
 /**
@@ -493,8 +595,35 @@ bool libspdm_sm2_key_exchange_init(const void *sm2_context, size_t hash_nid,
 bool libspdm_sm2_key_exchange_generate_key(void *sm2_context, uint8_t *public_data,
                                            size_t *public_size)
 {
-    /* current openssl only supports ECDH with SM2 curve, but does not support SM2-key-exchange.*/
+#if LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT
+    libspdm_sm2_ke_context *ctx = sm2_context;
+    libspdm_key_context *new_key_ctx;
+    EVP_PKEY *new_pkey;
+    bool result;
+
+    if (ctx == NULL || ctx->key_ctx.evp_pkey == NULL || public_size == NULL ||
+        (public_data == NULL && *public_size != 0)) {
+        return false;
+    }
+    new_key_ctx = libspdm_sm2_dsa_new_by_nid(LIBSPDM_CRYPTO_NID_SM2_DSA_P256);
+    if (new_key_ctx == NULL) {
+        return false;
+    }
+    new_pkey = new_key_ctx->evp_pkey;
+    new_key_ctx->evp_pkey = NULL;
+    libspdm_sm2_dsa_free(new_key_ctx);
+    result = sm2_get_public_key(new_pkey, public_data, public_size);
+    if (result) {
+        EVP_PKEY_free(ctx->key_ctx.evp_pkey);
+        ctx->key_ctx.evp_pkey = new_pkey;
+        new_pkey = NULL;
+    }
+    EVP_PKEY_free(new_pkey);
+    return result;
+#else
+    (void)sm2_context; (void)public_data; (void)public_size;
     return false;
+#endif
 }
 
 /**
@@ -529,8 +658,79 @@ bool libspdm_sm2_key_exchange_compute_key(void *sm2_context,
                                           size_t peer_public_size, uint8_t *key,
                                           size_t *key_size)
 {
-    /* current openssl only supports ECDH with SM2 curve, but does not support SM2-key-exchange.*/
+#if LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT
+    libspdm_sm2_ke_context *ctx = sm2_context;
+    EVP_PKEY *peer = NULL;
+    EVP_PKEY_CTX *pctx = NULL;
+    OSSL_PARAM params[8];
+    const uint8_t *self_id, *peer_id;
+    size_t self_id_size, peer_id_size, outlen;
+    int initiator;
+
+    if (ctx == NULL || !ctx->initialized || ctx->key_ctx.evp_pkey == NULL ||
+        peer_public == NULL || peer_public_size != SM2_PUBLIC_SIZE ||
+        key == NULL || key_size == NULL || *key_size == 0) {
+        return false;
+    }
+    peer = EVP_PKEY_new();
+    if (peer == NULL || EVP_PKEY_copy_parameters(peer, ctx->key_ctx.evp_pkey) <= 0) {
+        EVP_PKEY_free(peer);
+        return false;
+    }
+    {
+        uint8_t encoded[65];
+        encoded[0] = 0x04;
+        libspdm_copy_mem(encoded + 1, sizeof(encoded) - 1,
+                         peer_public, SM2_PUBLIC_SIZE);
+        if (EVP_PKEY_set1_encoded_public_key(peer, encoded, sizeof(encoded)) <= 0 &&
+            EVP_PKEY_set_octet_string_param(peer, OSSL_PKEY_PARAM_PUB_KEY,
+                                            encoded, sizeof(encoded)) <= 0) {
+            EVP_PKEY_free(peer);
+            return false;
+        }
+    }
+    self_id = ctx->initiator ? ctx->id_a : ctx->id_b;
+    self_id_size = ctx->initiator ? ctx->id_a_size : ctx->id_b_size;
+    peer_id = ctx->initiator ? ctx->id_b : ctx->id_a;
+    peer_id_size = ctx->initiator ? ctx->id_b_size : ctx->id_a_size;
+    pctx = EVP_PKEY_CTX_new_from_pkey(NULL, ctx->key_ctx.evp_pkey, NULL);
+    if (pctx == NULL) {
+        EVP_PKEY_free(peer);
+        return false;
+    }
+    initiator = ctx->initiator ? 1 : 0;
+    outlen = *key_size;
+    /* SPDM KEY_EXCHANGE carries one XY; use it as both static and ephemeral (R=P). */
+    params[0] = OSSL_PARAM_construct_int(OSSL_EXCHANGE_PARAM_INITIATOR, &initiator);
+    params[1] = OSSL_PARAM_construct_octet_string(OSSL_EXCHANGE_PARAM_SELF_ID,
+                                                   (void *)self_id, self_id_size);
+    params[2] = OSSL_PARAM_construct_octet_string(OSSL_EXCHANGE_PARAM_PEER_ID,
+                                                   (void *)peer_id, peer_id_size);
+    params[3] = OSSL_PARAM_construct_octet_ptr(OSSL_EXCHANGE_PARAM_SELF_ENC_KEY,
+                                                (void **)&ctx->key_ctx.evp_pkey,
+                                                sizeof(ctx->key_ctx.evp_pkey));
+    params[4] = OSSL_PARAM_construct_octet_ptr(OSSL_EXCHANGE_PARAM_PEER_ENC_KEY,
+                                                (void **)&peer, sizeof(peer));
+    params[5] = OSSL_PARAM_construct_utf8_string(OSSL_EXCHANGE_PARAM_DIGEST,
+                                                  (char *)"SM3", 0);
+    params[6] = OSSL_PARAM_construct_size_t(OSSL_EXCHANGE_PARAM_OUTLEN, &outlen);
+    params[7] = OSSL_PARAM_construct_end();
+    {
+        bool result = EVP_PKEY_derive_init_ex(pctx, params) > 0 &&
+                      EVP_PKEY_derive_set_peer(pctx, peer) > 0 &&
+                      EVP_PKEY_derive(pctx, key, &outlen) > 0;
+        if (result) {
+            *key_size = outlen;
+        }
+        EVP_PKEY_CTX_free(pctx);
+        EVP_PKEY_free(peer);
+        return result;
+    }
+#else
+    (void)sm2_context; (void)peer_public; (void)peer_public_size;
+    (void)key; (void)key_size;
     return false;
+#endif
 }
 
 static void ecc_signature_der_to_bin(uint8_t *der_signature,
@@ -705,7 +905,7 @@ bool libspdm_sm2_dsa_sign(const void *sm2_context, size_t hash_nid,
     }
 
     pkey = ((libspdm_key_context *)sm2_context)->evp_pkey;
-    if (pkey == NULL || EVP_PKEY_id(pkey) != EVP_PKEY_SM2) {
+    if (!sm2_pkey_is_sm2(pkey)) {
         return false;
     }
     half_size = 32;
@@ -811,7 +1011,6 @@ bool libspdm_sm2_dsa_verify(const void *sm2_context, size_t hash_nid,
     int32_t result;
     uint8_t der_signature[32 * 2 + 8];
     size_t der_sig_size;
-    int32_t nid;
 
     if (sm2_context == NULL || message == NULL || signature == NULL) {
         return false;
@@ -822,15 +1021,7 @@ bool libspdm_sm2_dsa_verify(const void *sm2_context, size_t hash_nid,
     }
 
     pkey = ((libspdm_key_context *)sm2_context)->evp_pkey;
-    if (pkey == NULL) {
-        return false;
-    }
-    nid = EVP_PKEY_id(pkey);
-    if (nid == EVP_PKEY_KEYMGMT) {
-        nid = OBJ_sn2nid(EVP_PKEY_get0_type_name(pkey));
-    }
-
-    if (nid != EVP_PKEY_SM2) {
+    if (!sm2_pkey_is_sm2(pkey)) {
         return false;
     }
     half_size = 32;

@@ -71,7 +71,12 @@
    NOTE: SMx, EdDSA, ML-DSA, SLH-DSA and ML-KEM are not supported.
 
    An [OpenSSL](https://www.openssl.org/) wrapper is included in [cryptlib_openssl](https://github.com/DMTF/libspdm/tree/main/os_stub/cryptlib_openssl).
-   NOTE: SM2-KeyExchange and SM4_GCM are not supported.
+   NOTE: SM2-KeyExchange requires building against the personal OpenSSL fork with SM2DH
+   (`openssl-3.5.5-sm`) and `-DLIBSPDM_SM2_KEY_EXCHANGE_P256_SUPPORT=ON`.
+   SPDM KEY_EXCHANGE carries one XY, so this wrapper uses that key as both the SM2
+   static and ephemeral keys (R=P). libspdm peers agree; a GB/T 32918.3 peer that
+   uses a distinct certificate static key will not.
+   SM4_GCM is optional via `-DLIBSPDM_AEAD_SM4_128_GCM_SUPPORT=ON`.
 
    libspdm provides support for [FIPS 140-3](https://csrc.nist.gov/publications/detail/fips/140/3/final). Refer to [libspdm FIPS](https://github.com/DMTF/libspdm/blob/main/doc/fips.md) for more information.
 

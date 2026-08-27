@@ -48,7 +48,7 @@ bool libspdm_read_responder_private_key(uint32_t base_asym_algo,
         file = "ecp521/end_responder.key";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/end_responder.key";
+        file = "sm2p256/end_responder.key";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/end_responder.key";
@@ -101,7 +101,7 @@ bool libspdm_read_responder_private_key_ex(uint32_t base_asym_algo, uint8_t key_
         file = "ecp521/end_responder4.key";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/end_responder4.key";
+        file = "sm2p256/end_responder.key";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/end_responder4.key";
@@ -151,7 +151,7 @@ bool libspdm_read_requester_private_key(uint16_t req_base_asym_alg,
         file = "ecp521/end_requester.key";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/end_requester.key";
+        file = "sm2p256/end_requester.key";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/end_requester.key";

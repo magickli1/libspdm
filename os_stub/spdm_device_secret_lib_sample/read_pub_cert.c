@@ -68,7 +68,7 @@ bool libspdm_read_responder_root_public_certificate(uint32_t base_hash_algo,
         file = "ecp521/ca.cert.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/ca.cert.der";
+        file = "sm2p256/ca.cert.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/ca.cert.der";
@@ -171,7 +171,7 @@ bool libspdm_read_responder_root_public_certificate_slot(uint8_t slot_id,
             file = "ecp521/ca.cert.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-            file = "sm2/ca.cert.der";
+            file = "sm2p256/ca.cert.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
             file = "ed25519/ca.cert.der";
@@ -207,7 +207,7 @@ bool libspdm_read_responder_root_public_certificate_slot(uint8_t slot_id,
             file = "ecp521/ca1.cert.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-            file = "sm2/ca1.cert.der";
+            file = "sm2p256/ca.cert.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
             file = "ed25519/ca1.cert.der";
@@ -309,7 +309,7 @@ bool libspdm_read_requester_root_public_certificate(uint32_t base_hash_algo,
         file = "ecp521/ca.cert.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/ca.cert.der";
+        file = "sm2p256/ca.cert.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/ca.cert.der";
@@ -417,7 +417,7 @@ bool libspdm_read_responder_public_certificate_chain(
         file = "ecp521/bundle_responder.certchain.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/bundle_responder.certchain.der";
+        file = "sm2p256/bundle_responder.certchain.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/bundle_responder.certchain.der";
@@ -550,7 +550,7 @@ bool libspdm_read_responder_public_certificate_chain_alias_cert_till_dev_cert_ca
         file = "ecp521/bundle_responder.certchain_alias_cert_partial_set.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/bundle_responder.certchain_alias_cert_partial_set.der";
+        file = "sm2p256/bundle_responder.certchain.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/bundle_responder.certchain_alias_cert_partial_set.der";
@@ -698,7 +698,7 @@ bool libspdm_read_responder_public_certificate_chain_alias_cert(
         file = "ecp521/bundle_responder.certchain_alias.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/bundle_responder.certchain_alias.der";
+        file = "sm2p256/bundle_responder.certchain.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/bundle_responder.certchain_alias.der";
@@ -844,7 +844,7 @@ bool libspdm_read_responder_public_certificate_chain_per_slot(
             file = "ecp521/bundle_responder.certchain.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-            file = "sm2/bundle_responder.certchain.der";
+            file = "sm2p256/bundle_responder.certchain.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
             file = "ed25519/bundle_responder.certchain.der";
@@ -881,7 +881,7 @@ bool libspdm_read_responder_public_certificate_chain_per_slot(
             file = "ecp521/bundle_responder.certchain4.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-            file = "sm2/bundle_responder.certchain4.der";
+            file = "sm2p256/bundle_responder.certchain.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
             file = "ed25519/bundle_responder.certchain4.der";
@@ -917,7 +917,7 @@ bool libspdm_read_responder_public_certificate_chain_per_slot(
             file = "ecp521/bundle_responder.certchain1.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-            file = "sm2/bundle_responder.certchain1.der";
+            file = "sm2p256/bundle_responder.certchain.der";
             break;
         case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
             file = "ed25519/bundle_responder.certchain1.der";
@@ -1049,7 +1049,7 @@ bool libspdm_read_requester_public_certificate_chain(
         file = "ecp521/bundle_requester.certchain.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/bundle_requester.certchain.der";
+        file = "sm2p256/bundle_requester.certchain.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/bundle_requester.certchain.der";
@@ -1151,7 +1151,7 @@ bool libspdm_read_responder_certificate(uint32_t base_asym_algo,
         file = "ecp521/end_responder.cert.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256:
-        file = "sm2/end_responder.cert.der";
+        file = "sm2p256/end_responder.cert.der";
         break;
     case SPDM_ALGORITHMS_BASE_ASYM_ALGO_EDDSA_ED25519:
         file = "ed25519/end_responder.cert.der";

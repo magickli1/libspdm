@@ -35,6 +35,7 @@ int libspdm_req_get_measurement_extension_log_test(void);
 
 #if LIBSPDM_ENABLE_CAPABILITY_KEY_EX_CAP
 int libspdm_req_key_exchange_test(void);
+extern bool m_libspdm_sm2_sm4_only;
 int libspdm_req_key_exchange_error_test(void);
 int libspdm_req_finish_test(void);
 #endif /* LIBSPDM_ENABLE_CAPABILITY_KEY_EX_CAP*/
@@ -115,9 +116,25 @@ int libspdm_req_get_endpoint_info_test(void);
 int libspdm_req_get_endpoint_info_error_test(void);
 #endif /* LIBSPDM_SEND_GET_ENDPOINT_INFO_SUPPORT */
 
-int main(void)
+int main(int argc, char **argv)
 {
     int return_value = 0;
+
+#if LIBSPDM_ENABLE_CAPABILITY_KEY_EX_CAP && LIBSPDM_SM2_DSA_SUPPORT && \
+    LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT && LIBSPDM_SM3_256_SUPPORT && \
+    LIBSPDM_AEAD_SM4_128_GCM_SUPPORT
+    if (argc > 1 && strcmp(argv[1], "--sm2-sm4") == 0) {
+        m_libspdm_use_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SM3_256;
+        m_libspdm_use_asym_algo = SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_SM2_ECC_SM2_P256;
+        m_libspdm_use_dhe_algo = SPDM_ALGORITHMS_DHE_NAMED_GROUP_SM2_P256;
+        m_libspdm_use_aead_algo = SPDM_ALGORITHMS_AEAD_CIPHER_SUITE_AEAD_SM4_GCM;
+        m_libspdm_sm2_sm4_only = true;
+        return libspdm_req_key_exchange_test();
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
 
     if (libspdm_req_get_version_test() != 0) {
         return_value = 1;

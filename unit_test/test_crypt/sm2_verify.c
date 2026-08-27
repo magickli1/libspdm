@@ -5,6 +5,7 @@
  **/
 
 #include "test_crypt.h"
+#include "industry_standard/spdm.h"
 
 #if (LIBSPDM_SM2_DSA_SUPPORT) || (LIBSPDM_SM2_KEY_EXCHANGE_SUPPORT)
 
@@ -19,6 +20,8 @@
  **/
 bool libspdm_validate_crypt_sm2(void)
 {
+    static const uint8_t id_a[] = SPDM_VERSION_1_2_KEY_EXCHANGE_REQUESTER_CONTEXT;
+    static const uint8_t id_b[] = SPDM_VERSION_1_2_KEY_EXCHANGE_RESPONDER_CONTEXT;
     void *Sm2_1;
     void *Sm2_2;
     uint8_t public1[66 * 2];
@@ -64,7 +67,8 @@ bool libspdm_validate_crypt_sm2(void)
     }
 
     libspdm_my_print("Initialize key1 ... ");
-    status = libspdm_sm2_key_exchange_init (Sm2_1, LIBSPDM_CRYPTO_NID_SM3_256, NULL, 0, NULL, 0,
+    status = libspdm_sm2_key_exchange_init (Sm2_1, LIBSPDM_CRYPTO_NID_SM3_256,
+                                            id_a, sizeof(id_a) - 1, id_b, sizeof(id_b) - 1,
                                             true);
     if (!status) {
         libspdm_my_print("[Fail]");
@@ -73,8 +77,9 @@ bool libspdm_validate_crypt_sm2(void)
         return false;
     }
 
-    libspdm_my_print("Initialize key1 ... ");
-    status = libspdm_sm2_key_exchange_init (Sm2_1, LIBSPDM_CRYPTO_NID_SM3_256, NULL, 0, NULL, 0,
+    libspdm_my_print("Initialize key2 ... ");
+    status = libspdm_sm2_key_exchange_init (Sm2_2, LIBSPDM_CRYPTO_NID_SM3_256,
+                                            id_a, sizeof(id_a) - 1, id_b, sizeof(id_b) - 1,
                                             false);
     if (!status) {
         libspdm_my_print("[Fail]");
@@ -134,6 +139,40 @@ bool libspdm_validate_crypt_sm2(void)
     } else {
         libspdm_my_print("[Pass]\n");
     }
+
+#if LIBSPDM_AEAD_SM4_SUPPORT
+    /* Exercise the SPDM crypto pipeline: SM2 shared secret -> SM3 -> SM4-GCM. */
+    {
+        static const uint8_t aad[] = "SPDM-AEAD";
+        static const uint8_t iv[12] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+        static const uint8_t plaintext[] = "SPDM secured message";
+        uint8_t digest[LIBSPDM_SM3_256_DIGEST_SIZE];
+        uint8_t ciphertext[sizeof(plaintext)];
+        uint8_t decrypted[sizeof(plaintext)];
+        uint8_t tag[16];
+        size_t ciphertext_size = sizeof(ciphertext);
+        size_t decrypted_size = sizeof(decrypted);
+        size_t tag_size = sizeof(tag);
+
+        if (!libspdm_sm3_256_hash_all(key1, key1_length, digest) ||
+            !libspdm_aead_sm4_gcm_encrypt(digest, 16, iv, sizeof(iv),
+                                          aad, sizeof(aad) - 1, plaintext,
+                                          sizeof(plaintext) - 1, tag, tag_size,
+                                          ciphertext, &ciphertext_size) ||
+            !libspdm_aead_sm4_gcm_decrypt(digest, 16, iv, sizeof(iv),
+                                          aad, sizeof(aad) - 1, ciphertext,
+                                          ciphertext_size, tag, tag_size,
+                                          decrypted, &decrypted_size) ||
+            decrypted_size != sizeof(plaintext) - 1 ||
+            memcmp(decrypted, plaintext, decrypted_size) != 0) {
+            libspdm_my_print("SM2-SM3-SM4 pipeline [Fail]\n");
+            libspdm_sm2_key_exchange_free(Sm2_1);
+            libspdm_sm2_key_exchange_free(Sm2_2);
+            return false;
+        }
+        libspdm_my_print("SM2-SM3-SM4 pipeline [Pass]\n");
+    }
+#endif /* LIBSPDM_AEAD_SM4_SUPPORT */
 
     libspdm_sm2_key_exchange_free(Sm2_1);
     libspdm_sm2_key_exchange_free(Sm2_2);

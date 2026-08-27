@@ -42,7 +42,59 @@ bool libspdm_aead_sm4_gcm_encrypt(const uint8_t *key, size_t key_size,
                                   uint8_t *tag_out, size_t tag_size,
                                   uint8_t *data_out, size_t *data_out_size)
 {
-    return false;
+    EVP_CIPHER_CTX *ctx;
+    EVP_CIPHER *cipher;
+    int out_len;
+    int final_len;
+    bool result;
+
+    if ((key == NULL) || (key_size != 16) || (iv == NULL) || (iv_size != 12) ||
+        (tag_out == NULL) || (tag_size != 16) || (data_out_size == NULL) ||
+        (data_in_size > INT_MAX) || (a_data_size > INT_MAX) ||
+        (*data_out_size < data_in_size) ||
+        ((a_data_size != 0) && (a_data == NULL)) ||
+        ((data_in_size != 0) && ((data_in == NULL) || (data_out == NULL)))) {
+        return false;
+    }
+
+    cipher = EVP_CIPHER_fetch(NULL, "SM4-GCM", NULL);
+    if (cipher == NULL) {
+        return false;
+    }
+    ctx = EVP_CIPHER_CTX_new();
+    if (ctx == NULL) {
+        EVP_CIPHER_free(cipher);
+        return false;
+    }
+
+    result = EVP_EncryptInit_ex(ctx, cipher, NULL, NULL, NULL) == 1 &&
+             EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)iv_size, NULL) == 1 &&
+             EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) == 1;
+    if (result && a_data_size != 0) {
+        result = EVP_EncryptUpdate(ctx, NULL, &out_len, a_data,
+                                   (int)a_data_size) == 1;
+    }
+    out_len = 0;
+    if (result && data_in_size != 0) {
+        result = EVP_EncryptUpdate(ctx, data_out, &out_len, data_in,
+                                   (int)data_in_size) == 1;
+    }
+    final_len = 0;
+    if (result) {
+        result = EVP_EncryptFinal_ex(ctx,
+                                    data_out == NULL ? NULL : data_out + out_len,
+                                    &final_len) == 1 &&
+                 EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, (int)tag_size,
+                                     tag_out) == 1;
+    }
+
+    EVP_CIPHER_CTX_free(ctx);
+    EVP_CIPHER_free(cipher);
+    if (!result) {
+        return false;
+    }
+    *data_out_size = (size_t)(out_len + final_len);
+    return true;
 }
 
 /**
@@ -77,5 +129,62 @@ bool libspdm_aead_sm4_gcm_decrypt(const uint8_t *key, size_t key_size,
                                   const uint8_t *tag, size_t tag_size,
                                   uint8_t *data_out, size_t *data_out_size)
 {
-    return false;
+    EVP_CIPHER_CTX *ctx;
+    EVP_CIPHER *cipher;
+    int out_len;
+    int final_len;
+    bool result;
+
+    if ((key == NULL) || (key_size != 16) || (iv == NULL) || (iv_size != 12) ||
+        (tag == NULL) || (tag_size != 16) || (data_out_size == NULL) ||
+        (data_in_size > INT_MAX) || (a_data_size > INT_MAX) ||
+        (*data_out_size < data_in_size) ||
+        ((a_data_size != 0) && (a_data == NULL)) ||
+        ((data_in_size != 0) && ((data_in == NULL) || (data_out == NULL)))) {
+        return false;
+    }
+
+    cipher = EVP_CIPHER_fetch(NULL, "SM4-GCM", NULL);
+    if (cipher == NULL) {
+        return false;
+    }
+    ctx = EVP_CIPHER_CTX_new();
+    if (ctx == NULL) {
+        EVP_CIPHER_free(cipher);
+        return false;
+    }
+
+    result = EVP_DecryptInit_ex(ctx, cipher, NULL, NULL, NULL) == 1 &&
+             EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)iv_size, NULL) == 1 &&
+             EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) == 1;
+    if (result && a_data_size != 0) {
+        result = EVP_DecryptUpdate(ctx, NULL, &out_len, a_data,
+                                   (int)a_data_size) == 1;
+    }
+    out_len = 0;
+    if (result && data_in_size != 0) {
+        result = EVP_DecryptUpdate(ctx, data_out, &out_len, data_in,
+                                   (int)data_in_size) == 1;
+    }
+    if (result) {
+        result = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, (int)tag_size,
+                                     (void *)tag) == 1;
+    }
+    final_len = 0;
+    if (result) {
+        result = EVP_DecryptFinal_ex(ctx,
+                                    data_out == NULL ? NULL : data_out + out_len,
+                                    &final_len) == 1;
+    }
+
+    EVP_CIPHER_CTX_free(ctx);
+    EVP_CIPHER_free(cipher);
+    if (!result) {
+        if ((data_out != NULL) && (data_in_size != 0)) {
+            libspdm_zero_mem(data_out, data_in_size);
+        }
+        return false;
+    }
+    *data_out_size = (size_t)(out_len + final_len);
+    return true;
 }

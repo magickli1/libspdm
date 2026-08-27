@@ -449,7 +449,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -609,7 +609,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -832,7 +832,7 @@ static libspdm_return_t receive_message(
             ptr = (void *)(spdm_response + 1);
             dhe_context = libspdm_dhe_new(
                 spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                    m_libspdm_use_dhe_algo, true);
+                    m_libspdm_use_dhe_algo, false);
             libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
             final_key_size = sizeof(final_key);
             libspdm_dhe_compute_key(
@@ -1072,7 +1072,7 @@ static libspdm_return_t receive_message(
             ptr = (void *)(spdm_response + 1);
             dhe_context = libspdm_dhe_new(
                 spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                    m_libspdm_use_dhe_algo, true);
+                    m_libspdm_use_dhe_algo, false);
             libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
             final_key_size = sizeof(final_key);
             libspdm_dhe_compute_key(
@@ -1278,7 +1278,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -1441,7 +1441,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -1610,7 +1610,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -1778,7 +1778,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -1944,7 +1944,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -2105,7 +2105,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -2269,7 +2269,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -2437,7 +2437,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -2589,7 +2589,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -2719,7 +2719,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -2880,7 +2880,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -3041,7 +3041,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -3202,7 +3202,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -3363,7 +3363,7 @@ static libspdm_return_t receive_message(
         ptr = (void *)(spdm_response + 1);
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                m_libspdm_use_dhe_algo, true);
+                m_libspdm_use_dhe_algo, false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -3524,7 +3524,7 @@ static libspdm_return_t receive_message(
         ptr = (void *)(spdm_response + 1);
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                m_libspdm_use_dhe_algo, true);
+                m_libspdm_use_dhe_algo, false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -3687,7 +3687,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -3850,7 +3850,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -4013,7 +4013,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -4172,7 +4172,7 @@ static libspdm_return_t receive_message(
         ptr = (void *)(spdm_response + 1);
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                m_libspdm_use_dhe_algo, true);
+                m_libspdm_use_dhe_algo, false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -4327,8 +4327,8 @@ static libspdm_return_t receive_message(
         ptr = (void *)(spdm_response + 1);
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                m_libspdm_use_dhe_algo,
-                true);
+            m_libspdm_use_dhe_algo,
+            false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -4488,7 +4488,7 @@ static libspdm_return_t receive_message(
         ptr = (void *)(spdm_response + 1);
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                m_libspdm_use_dhe_algo, true);
+                m_libspdm_use_dhe_algo, false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -4649,7 +4649,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -4807,7 +4807,7 @@ static libspdm_return_t receive_message(
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
                 m_libspdm_use_dhe_algo,
-                true);
+                false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -4965,7 +4965,7 @@ static libspdm_return_t receive_message(
         ptr = (void *)(spdm_response + 1);
         dhe_context = libspdm_dhe_new(
             spdm_response->header.spdm_version << SPDM_VERSION_NUMBER_SHIFT_BIT,
-                m_libspdm_use_dhe_algo, true);
+                m_libspdm_use_dhe_algo, false);
         libspdm_dhe_generate_key(m_libspdm_use_dhe_algo, dhe_context, ptr, &dhe_key_size);
         final_key_size = sizeof(final_key);
         libspdm_dhe_compute_key(
@@ -7813,8 +7813,26 @@ static void req_key_exchange_case34(void **state)
     free(data);
 }
 
+bool m_libspdm_sm2_sm4_only;
+
 int libspdm_req_key_exchange_test(void)
 {
+    if (m_libspdm_sm2_sm4_only) {
+        const struct CMUnitTest sm2_test_cases[] = {
+            cmocka_unit_test(req_key_exchange_case30),
+        };
+        libspdm_test_context_t test_context = {
+            LIBSPDM_TEST_CONTEXT_VERSION,
+            true,
+            send_message,
+            receive_message,
+        };
+        libspdm_setup_test_context(&test_context);
+        return cmocka_run_group_tests(sm2_test_cases,
+                                      libspdm_unit_test_group_setup,
+                                      libspdm_unit_test_group_teardown);
+    }
+
     const struct CMUnitTest test_cases[] = {
         /* SendRequest failed*/
         cmocka_unit_test(req_key_exchange_case1),
