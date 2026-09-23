@@ -662,6 +662,38 @@ bool libspdm_measurement_opaque_data(
     return true;
 }
 
+#if LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX
+bool libspdm_measurement_opaque_data_ex(
+    void *spdm_context,
+    const uint32_t *session_id,
+    spdm_version_number_t spdm_version,
+    uint8_t measurement_specification,
+    uint32_t measurement_hash_algo,
+    uint8_t measurement_index,
+    uint8_t request_attribute,
+    const uint8_t *requester_nonce,
+    uint8_t slot_id_param,
+    size_t request_context_size,
+    const void *request_context,
+    void *measurements,
+    uint8_t measurements_count,
+    size_t measurements_size,
+    void *opaque_data,
+    size_t *opaque_data_size)
+{
+    (void)requester_nonce;
+    (void)slot_id_param;
+    (void)measurements;
+    (void)measurements_count;
+    (void)measurements_size;
+
+    return libspdm_measurement_opaque_data(
+        spdm_context, session_id, spdm_version, measurement_specification,
+        measurement_hash_algo, measurement_index, request_attribute,
+        request_context_size, request_context, opaque_data, opaque_data_size);
+}
+#endif /* LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX */
+
 #ifndef LIBSPDM_MAX_MEASUREMENT_RECORD_SIZE
 #define LIBSPDM_MAX_MEASUREMENT_RECORD_SIZE 0x1000
 #endif

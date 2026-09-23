@@ -4,6 +4,7 @@
  *  License: BSD 3-Clause License. For full text see link: https://github.com/DMTF/libspdm/blob/main/LICENSE.md
  **/
 
+#include <stdint.h>
 #include <openssl/err.h>
 #include <tss2/tss2_common.h>
 #include <tss2/tss2_esys.h>
@@ -15,6 +16,8 @@
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_tpm2_types.h>
 #include <tss2/tss2_mu.h>
+#include <openssl/evp.h>
+#include "hal/library/memlib.h"
 #include "library/spdm_crypt_ext_lib.h"
 #include "internal/libspdm_crypt_lib.h"
 #include "industry_standard/spdm.h"
@@ -179,19 +182,31 @@ bool libspdm_tpm_read_pcr(uint32_t hash_algo, uint32_t index, void *buffer, size
     switch (hash_algo)
     {
     case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_256:
-    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_256:
-    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SM3_256:
         sel.pcrSelections[0].hash = TPM2_ALG_SHA256;
         digest_size = 32;
         break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_256:
+        sel.pcrSelections[0].hash = TPM2_ALG_SHA3_256;
+        digest_size = 32;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SM3_256:
+        sel.pcrSelections[0].hash = TPM2_ALG_SM3_256;
+        digest_size = 32;
+        break;
     case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_384:
-    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_384:
         sel.pcrSelections[0].hash = TPM2_ALG_SHA384;
         digest_size = 48;
         break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_384:
+        sel.pcrSelections[0].hash = TPM2_ALG_SHA3_384;
+        digest_size = 48;
+        break;
     case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_512:
-    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_512:
         sel.pcrSelections[0].hash = TPM2_ALG_SHA512;
+        digest_size = 64;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_512:
+        sel.pcrSelections[0].hash = TPM2_ALG_SHA3_512;
         digest_size = 64;
         break;
     default:
@@ -424,16 +439,22 @@ static bool map_spdm_meas_hash_to_tpm(uint32_t meas_hash_algo, TPMI_ALG_HASH *tp
 {
     switch (meas_hash_algo) {
     case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_256:
-    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_256:
         *tpm_hash = TPM2_ALG_SHA256;
         return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_256:
+        *tpm_hash = TPM2_ALG_SHA3_256;
+        return true;
     case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_384:
-    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_384:
         *tpm_hash = TPM2_ALG_SHA384;
         return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_384:
+        *tpm_hash = TPM2_ALG_SHA3_384;
+        return true;
     case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_512:
-    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_512:
         *tpm_hash = TPM2_ALG_SHA512;
+        return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_512:
+        *tpm_hash = TPM2_ALG_SHA3_512;
         return true;
     case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SM3_256:
         *tpm_hash = TPM2_ALG_SM3_256;
@@ -498,9 +519,11 @@ bool libspdm_tpm_quote(
 
     memset(&qual_data, 0, sizeof(qual_data));
     if (nonce != NULL && nonce_size > 0) {
-        qual_data.size = (UINT16)(nonce_size > sizeof(qual_data.buffer) ?
-                                  sizeof(qual_data.buffer) : nonce_size);
-        memcpy(qual_data.buffer, nonce, qual_data.size);
+        if (nonce_size > sizeof(qual_data.buffer)) {
+            return false;
+        }
+        qual_data.size = (UINT16)nonce_size;
+        memcpy(qual_data.buffer, nonce, nonce_size);
     }
 
     in_scheme.scheme = TPM2_ALG_NULL;
@@ -756,4 +779,391 @@ bool libspdm_tpm_verify_quote(
     }
 
     return false;
+}
+
+/**
+ * Map the configured IAK base-hash algorithm to the TPM ECDSA scheme hash and
+ * matching OpenSSL digest. Defaults to SHA-256 when LIBSPDM_TPM_IAK_BASE_HASH_ALGO
+ * is not defined (e.g. standalone crypt unit tests).
+ **/
+static bool tpm_iak_sig_hash_params(TPMI_ALG_HASH *tpm_hash, const EVP_MD **evp_md)
+{
+    uint32_t base_hash_algo;
+
+#if defined(LIBSPDM_TPM_IAK_BASE_HASH_ALGO)
+    base_hash_algo = (uint32_t)LIBSPDM_TPM_IAK_BASE_HASH_ALGO;
+#else
+    base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_256;
+#endif
+
+    switch (base_hash_algo) {
+    case SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_256:
+        *tpm_hash = TPM2_ALG_SHA256;
+        *evp_md = EVP_sha256();
+        return true;
+    case SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_384:
+        *tpm_hash = TPM2_ALG_SHA384;
+        *evp_md = EVP_sha384();
+        return true;
+    case SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_512:
+        *tpm_hash = TPM2_ALG_SHA512;
+        *evp_md = EVP_sha512();
+        return true;
+    default:
+        return false;
+    }
+}
+
+/**
+ * Map an SPDM measurement hash algorithm (PCR bank) to the matching base-hash
+ * algorithm and digest size used for TPM Quote pcrDigest.
+ *
+ * Per TPM 2.0, pcrDigest is HashAlg(concatenation of selected PCR values)
+ * where HashAlg is the selected PCR bank's hashAlg — not a fixed SHA-256.
+ **/
+static bool tpm_measurement_hash_to_pcr_digest_algo(uint32_t hash_algo,
+                                                    uint32_t *base_hash_algo,
+                                                    size_t *digest_size)
+{
+    switch (hash_algo) {
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_256:
+        *base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_256;
+        *digest_size = LIBSPDM_SHA256_DIGEST_SIZE;
+        return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_384:
+        *base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_384;
+        *digest_size = LIBSPDM_SHA384_DIGEST_SIZE;
+        return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_512:
+        *base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_512;
+        *digest_size = LIBSPDM_SHA512_DIGEST_SIZE;
+        return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_256:
+        *base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA3_256;
+        *digest_size = LIBSPDM_SHA3_256_DIGEST_SIZE;
+        return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_384:
+        *base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA3_384;
+        *digest_size = LIBSPDM_SHA3_384_DIGEST_SIZE;
+        return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_512:
+        *base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA3_512;
+        *digest_size = LIBSPDM_SHA3_512_DIGEST_SIZE;
+        return true;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SM3_256:
+        *base_hash_algo = SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SM3_256;
+        *digest_size = LIBSPDM_SM3_256_DIGEST_SIZE;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool libspdm_tpm_quote_evidence(uint32_t key_handle,
+                                uint32_t hash_algo,
+                                uint32_t pcr_mask,
+                                const uint8_t *nonce,
+                                size_t nonce_size,
+                                const uint8_t *pcr_data,
+                                size_t pcr_data_size,
+                                uint8_t *attest,
+                                size_t *attest_size,
+                                uint8_t *signature,
+                                size_t *signature_size)
+{
+    uint8_t quote_buffer[2048];
+    uint8_t pcr_indices[24];
+    uint8_t expected_pcr_select[3];
+    uint8_t expected_pcr_digest[LIBSPDM_MAX_HASH_SIZE];
+    TPM2B_ATTEST decoded_quote;
+    TPMS_ATTEST decoded_attest;
+    TPMT_SIGNATURE decoded_signature;
+    TPMI_ALG_HASH expected_pcr_bank;
+    TPMI_ALG_HASH expected_iak_sig_hash;
+    const EVP_MD *iak_evp_md;
+    uint32_t pcr_digest_hash_algo;
+    size_t pcr_digest_size;
+    size_t quote_size;
+    size_t pcr_count;
+    size_t offset;
+    size_t attest_used;
+    size_t signature_used;
+    TSS2_RC result;
+    uint8_t index;
+
+    if ((nonce == NULL) || (nonce_size != SPDM_NONCE_SIZE) ||
+        (pcr_data == NULL) || (pcr_data_size == 0) ||
+        (attest == NULL) || (attest_size == NULL) ||
+        (signature == NULL) || (signature_size == NULL)) {
+        return false;
+    }
+    if (!tpm_measurement_hash_to_pcr_digest_algo(hash_algo, &pcr_digest_hash_algo,
+                                                 &pcr_digest_size) ||
+        !map_spdm_meas_hash_to_tpm(hash_algo, &expected_pcr_bank) ||
+        !tpm_iak_sig_hash_params(&expected_iak_sig_hash, &iak_evp_md)) {
+        return false;
+    }
+    (void)iak_evp_md;
+    if ((pcr_mask == 0) || (pcr_mask >= (1u << 24))) {
+        return false;
+    }
+
+    libspdm_zero_mem(expected_pcr_select, sizeof(expected_pcr_select));
+    pcr_count = 0;
+    for (index = 0; index < 24; index++) {
+        if ((pcr_mask & (1u << index)) != 0) {
+            pcr_indices[pcr_count] = index;
+            pcr_count++;
+            expected_pcr_select[index / 8] |= (uint8_t)(1u << (index % 8));
+        }
+    }
+
+    quote_size = sizeof(quote_buffer);
+    if (!libspdm_tpm_quote((const void *)(uintptr_t)key_handle, hash_algo,
+                           pcr_indices, pcr_count, nonce, nonce_size,
+                           quote_buffer, &quote_size)) {
+        return false;
+    }
+
+    offset = 0;
+    result = Tss2_MU_TPM2B_ATTEST_Unmarshal(quote_buffer, quote_size, &offset,
+                                            &decoded_quote);
+    if ((result != TSS2_RC_SUCCESS) || (offset == 0) || (offset >= quote_size)) {
+        return false;
+    }
+    attest_used = offset;
+    signature_used = quote_size - attest_used;
+    if ((attest_used > *attest_size) || (signature_used > *signature_size)) {
+        return false;
+    }
+
+    offset = 0;
+    result = Tss2_MU_TPMS_ATTEST_Unmarshal(decoded_quote.attestationData,
+                                           decoded_quote.size, &offset,
+                                           &decoded_attest);
+    if ((result != TSS2_RC_SUCCESS) || (offset != decoded_quote.size)) {
+        return false;
+    }
+    if ((decoded_attest.magic != TPM2_GENERATED_VALUE) ||
+        (decoded_attest.type != TPM2_ST_ATTEST_QUOTE)) {
+        return false;
+    }
+    if ((decoded_attest.extraData.size != nonce_size) ||
+        !libspdm_consttime_is_mem_equal(decoded_attest.extraData.buffer,
+                                        nonce, nonce_size)) {
+        return false;
+    }
+    if ((decoded_attest.attested.quote.pcrSelect.count != 1) ||
+        (decoded_attest.attested.quote.pcrSelect.pcrSelections[0].hash !=
+         expected_pcr_bank) ||
+        (decoded_attest.attested.quote.pcrSelect.pcrSelections[0].sizeofSelect !=
+         sizeof(expected_pcr_select)) ||
+        !libspdm_consttime_is_mem_equal(
+            decoded_attest.attested.quote.pcrSelect.pcrSelections[0].pcrSelect,
+            expected_pcr_select, sizeof(expected_pcr_select))) {
+        return false;
+    }
+    if ((decoded_attest.attested.quote.pcrDigest.size != pcr_digest_size) ||
+        !libspdm_hash_all(pcr_digest_hash_algo, pcr_data, pcr_data_size,
+                          expected_pcr_digest) ||
+        !libspdm_consttime_is_mem_equal(
+            decoded_attest.attested.quote.pcrDigest.buffer,
+            expected_pcr_digest, pcr_digest_size)) {
+        return false;
+    }
+
+    offset = attest_used;
+    result = Tss2_MU_TPMT_SIGNATURE_Unmarshal(quote_buffer, quote_size, &offset,
+                                              &decoded_signature);
+    if ((result != TSS2_RC_SUCCESS) || (offset != quote_size) ||
+        (decoded_signature.sigAlg != TPM2_ALG_ECDSA) ||
+        (decoded_signature.signature.ecdsa.hash != expected_iak_sig_hash)) {
+        return false;
+    }
+
+    libspdm_copy_mem(attest, *attest_size, quote_buffer, attest_used);
+    libspdm_copy_mem(signature, *signature_size,
+                     quote_buffer + attest_used, signature_used);
+    *attest_size = attest_used;
+    *signature_size = signature_used;
+    return true;
+}
+
+bool libspdm_tpm_verify_quote_evidence(const uint8_t *cert,
+                                       size_t cert_size,
+                                       uint32_t hash_algo,
+                                       uint32_t pcr_mask,
+                                       const uint8_t *nonce,
+                                       size_t nonce_size,
+                                       const uint8_t *pcr_data,
+                                       size_t pcr_data_size,
+                                       const uint8_t *attest,
+                                       size_t attest_size,
+                                       const uint8_t *signature,
+                                       size_t signature_size)
+{
+    TPM2B_ATTEST decoded_quote;
+    TPMS_ATTEST decoded_attest;
+    TPMT_SIGNATURE decoded_signature;
+    uint8_t expected_pcr_digest[LIBSPDM_MAX_HASH_SIZE];
+    uint8_t expected_pcr_select[3];
+    TPMI_ALG_HASH expected_pcr_bank;
+    uint32_t pcr_digest_hash_algo;
+    size_t pcr_digest_size;
+    size_t offset;
+    TSS2_RC result;
+    bool verified;
+    uint8_t index;
+
+    if ((cert == NULL) || (cert_size == 0) ||
+        (nonce == NULL) || (nonce_size != SPDM_NONCE_SIZE) ||
+        (pcr_data == NULL) || (pcr_data_size == 0) ||
+        (attest == NULL) || (attest_size == 0) ||
+        (signature == NULL) || (signature_size == 0)) {
+        return false;
+    }
+
+    if (!tpm_measurement_hash_to_pcr_digest_algo(hash_algo, &pcr_digest_hash_algo,
+                                                 &pcr_digest_size)) {
+        return false;
+    }
+
+    libspdm_zero_mem(expected_pcr_select, sizeof(expected_pcr_select));
+    switch (hash_algo) {
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_256:
+        expected_pcr_bank = TPM2_ALG_SHA256;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_256:
+        expected_pcr_bank = TPM2_ALG_SHA3_256;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SM3_256:
+        expected_pcr_bank = TPM2_ALG_SM3_256;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_384:
+        expected_pcr_bank = TPM2_ALG_SHA384;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_384:
+        expected_pcr_bank = TPM2_ALG_SHA3_384;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_512:
+        expected_pcr_bank = TPM2_ALG_SHA512;
+        break;
+    case SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA3_512:
+        expected_pcr_bank = TPM2_ALG_SHA3_512;
+        break;
+    default:
+        return false;
+    }
+    if ((pcr_mask == 0) || (pcr_mask >= (1u << 24))) {
+        return false;
+    }
+    for (index = 0; index < 24; index++) {
+        if ((pcr_mask & (1u << index)) != 0) {
+            expected_pcr_select[index / 8] |= (uint8_t)(1u << (index % 8));
+        }
+    }
+
+    offset = 0;
+    result = Tss2_MU_TPM2B_ATTEST_Unmarshal(attest, attest_size, &offset,
+                                            &decoded_quote);
+    if ((result != TSS2_RC_SUCCESS) || (offset != attest_size)) {
+        return false;
+    }
+    offset = 0;
+    result = Tss2_MU_TPMS_ATTEST_Unmarshal(decoded_quote.attestationData,
+                                           decoded_quote.size, &offset,
+                                           &decoded_attest);
+    if ((result != TSS2_RC_SUCCESS) || (offset != decoded_quote.size)) {
+        return false;
+    }
+    /* Attestation structure must be a valid Quote. */
+    if ((decoded_attest.magic != TPM2_GENERATED_VALUE) ||
+        (decoded_attest.type != TPM2_ST_ATTEST_QUOTE)) {
+        return false;
+    }
+    /* Qualifying data (extraData) must match the requester nonce. */
+    if ((decoded_attest.extraData.size != nonce_size) ||
+        !libspdm_consttime_is_mem_equal(decoded_attest.extraData.buffer,
+                                        nonce, nonce_size)) {
+        return false;
+    }
+    /* PCR selection must match the expected bank and mask. */
+    if ((decoded_attest.attested.quote.pcrSelect.count != 1) ||
+        (decoded_attest.attested.quote.pcrSelect.pcrSelections[0].hash !=
+         expected_pcr_bank) ||
+        (decoded_attest.attested.quote.pcrSelect.pcrSelections[0].sizeofSelect !=
+         sizeof(expected_pcr_select)) ||
+        !libspdm_consttime_is_mem_equal(
+            decoded_attest.attested.quote.pcrSelect.pcrSelections[0].pcrSelect,
+            expected_pcr_select, sizeof(expected_pcr_select))) {
+        return false;
+    }
+    /* pcrDigest must equal Hash(concatenation of selected PCR values). */
+    if ((decoded_attest.attested.quote.pcrDigest.size != pcr_digest_size) ||
+        !libspdm_hash_all(pcr_digest_hash_algo, pcr_data, pcr_data_size,
+                          expected_pcr_digest) ||
+        !libspdm_consttime_is_mem_equal(
+            decoded_attest.attested.quote.pcrDigest.buffer,
+            expected_pcr_digest, pcr_digest_size)) {
+        return false;
+    }
+
+    {
+        TPMI_ALG_HASH expected_iak_sig_hash;
+        const EVP_MD *iak_evp_md;
+
+        uint8_t quote_buffer[2048];
+        size_t quote_size;
+        void *pub_key_context;
+        uint32_t base_asym_algo;
+
+        if (!tpm_iak_sig_hash_params(&expected_iak_sig_hash, &iak_evp_md)) {
+            return false;
+        }
+        (void)iak_evp_md;
+        offset = 0;
+        result = Tss2_MU_TPMT_SIGNATURE_Unmarshal(signature, signature_size,
+                                                  &offset, &decoded_signature);
+        if ((result != TSS2_RC_SUCCESS) || (offset != signature_size) ||
+            (decoded_signature.sigAlg != TPM2_ALG_ECDSA) ||
+            (decoded_signature.signature.ecdsa.hash != expected_iak_sig_hash)) {
+            return false;
+        }
+
+        if ((attest_size > sizeof(quote_buffer)) ||
+            (signature_size > (sizeof(quote_buffer) - attest_size))) {
+            return false;
+        }
+        libspdm_copy_mem(quote_buffer, sizeof(quote_buffer), attest, attest_size);
+        libspdm_copy_mem(quote_buffer + attest_size,
+                         sizeof(quote_buffer) - attest_size,
+                         signature, signature_size);
+        quote_size = attest_size + signature_size;
+
+#if defined(LIBSPDM_TPM_IAK_BASE_ASYM_ALGO)
+        base_asym_algo = (uint32_t)LIBSPDM_TPM_IAK_BASE_ASYM_ALGO;
+#else
+        base_asym_algo = SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_ECDSA_ECC_NIST_P256;
+#endif
+        /* Quote evidence supports only the upstream P-256 helper. */
+        if (base_asym_algo !=
+            SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_ECDSA_ECC_NIST_P256) {
+            return false;
+        }
+        if (!libspdm_asym_get_public_key_from_x509(
+                base_asym_algo, cert, cert_size, &pub_key_context)) {
+            return false;
+        }
+
+        /*
+         * Signature verification is the committed helper from DMTF libspdm.
+         * hash_algo 0 keeps the helper on the Quote's own signature hash.
+         * The IAK hash was checked above; the PCR bank may use a different hash.
+         */
+        verified = libspdm_tpm_verify_quote(
+            pub_key_context, base_asym_algo, 0,
+            quote_buffer, quote_size, nonce, nonce_size);
+        libspdm_asym_free(base_asym_algo, pub_key_context);
+        return verified;
+    }
 }

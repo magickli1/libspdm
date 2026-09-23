@@ -44,6 +44,18 @@ The TPM integration layer provides:
 
 These APIs are designed to plug into libspdm cryptographic and measurement flows.
 
+### Bound measurement evidence
+
+`LIBSPDM_TPM_SUPPORT=ON` automatically enables
+`LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX`. The responder therefore calls
+`libspdm_measurement_opaque_data_ex()` after collecting its measurement record. The TPM
+implementation uses the requester nonce as Quote `extraData` and checks that the quoted PCR
+digest represents the measurement record returned in the same SPDM response.
+
+The extended callback is platform-neutral. Non-TPM integrations can enable it independently to
+return TEE tokens, DICE evidence, or vendor-defined proofs. Integrations that leave it disabled
+continue to implement `libspdm_measurement_opaque_data()` without source or ABI changes.
+
 ---
 
 ## Initialization

@@ -23,8 +23,8 @@
 #include "industry_standard/cxl_tsp.h"
 
 /* for meas test */
-#define LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER 4
-#define LIBSPDM_MEASUREMENT_BLOCK_NUMBER (LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER /*Index - 1~4*/ + \
+#define LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER 8
+#define LIBSPDM_MEASUREMENT_BLOCK_NUMBER (LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER /*Index - 1~8*/ + \
                                           1 /*SVN - 0x10*/ + \
                                           1 /*HEM - 0x11*/ + \
                                           1 /*Manifest - 0xFD*/ + 1 /*DEVICE_MODE - 0xFE*/)

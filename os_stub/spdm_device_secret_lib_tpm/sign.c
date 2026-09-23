@@ -19,7 +19,47 @@
 #include "internal/libspdm_device_secret_lib.h"
 #include "library/spdm_crypt_ext_lib.h"
 #include "internal/libspdm_common_lib.h"
+#include "industry_standard/spdm.h"
 #include "keys.h"
+
+static bool tpm_transcript_request_uses_iak_slot(const void *spdm_context)
+{
+    const libspdm_context_t *context;
+    const uint8_t *request;
+    const spdm_message_header_t *header;
+    uint8_t slot_id;
+
+    context = spdm_context;
+    if ((context == NULL) || (context->last_spdm_request == NULL) ||
+        (context->last_spdm_request_size < sizeof(*header))) {
+        return false;
+    }
+
+    request = context->last_spdm_request;
+    header = (const spdm_message_header_t *)request;
+    switch (header->request_response_code) {
+    case SPDM_CHALLENGE:
+        slot_id = (uint8_t)(header->param1 & 0xF);
+        break;
+    case SPDM_KEY_EXCHANGE:
+        slot_id = (uint8_t)(header->param2 & 0xF);
+        break;
+    case SPDM_GET_MEASUREMENTS:
+        if (((header->param1 &
+              SPDM_GET_MEASUREMENTS_REQUEST_ATTRIBUTES_GENERATE_SIGNATURE) == 0) ||
+            (header->spdm_version < SPDM_MESSAGE_VERSION_11) ||
+            (context->last_spdm_request_size < sizeof(spdm_get_measurements_request_t))) {
+            return false;
+        }
+        slot_id = (uint8_t)(((const spdm_get_measurements_request_t *)request)->slot_id_param &
+                            SPDM_GET_MEASUREMENTS_REQUEST_SLOT_ID_MASK);
+        break;
+    default:
+        return false;
+    }
+
+    return slot_id == LIBSPDM_TPM_IAK_SLOT_ID;
+}
 
 #if (LIBSPDM_ENABLE_CAPABILITY_MUT_AUTH_CAP) || (LIBSPDM_ENABLE_CAPABILITY_ENDPOINT_INFO_CAP)
 static const char *get_requester_key_handle(uint8_t slot_id)
@@ -158,6 +198,17 @@ bool libspdm_responder_data_sign(
     void *context = NULL;
     bool result = false;
     const char *key_handle = NULL;
+
+    /* A restricted IAK is provisioned solely for TPM2 Quote. It must never
+     * sign an SPDM transcript (CHALLENGE, MEASUREMENTS, or KEY_EXCHANGE). */
+    if ((key_pair_id == LIBSPDM_TPM_IAK_KEY_PAIR_ID) ||
+        tpm_transcript_request_uses_iak_slot(spdm_context)) {
+        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
+                       "refusing SPDM transcript signature with IAK slot\n"));
+        /* Always emit to stderr so emulator CI can assert this failure mode. */
+        fprintf(stderr, "refusing SPDM transcript signature with IAK slot\n");
+        return false;
+    }
 
     if (!libspdm_tpm_device_init()) {
         return false;

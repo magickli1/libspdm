@@ -14,8 +14,6 @@
 #include "industry_standard/spdm_secured_message.h"
 #include "keys.h"
 
-extern size_t libspdm_secret_lib_meas_opaque_data_size;
-
 extern size_t libspdm_fill_measurement_image_hash_block(
     bool use_bit_stream,
     uint32_t measurement_hash_algo,

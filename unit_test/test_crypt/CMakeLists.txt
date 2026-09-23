@@ -35,6 +35,7 @@ target_sources(test_crypt
         mldsa_verify2.c
         slhdsa_verify.c
         slhdsa_verify2.c
+        tpm_quote_verify.c
         os_support.c
 )
 

@@ -118,6 +118,17 @@
 #define LIBSPDM_SEND_GET_ENDPOINT_INFO_SUPPORT 1
 #endif
 
+/* If 1 then the extended measurement opaque-data callback is used. The callback can bind
+ * platform-specific evidence to the requester nonce and returned measurement record.
+ */
+#ifndef LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX
+    #ifdef LIBSPDM_TPM_SUPPORT
+        #define LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX LIBSPDM_TPM_SUPPORT
+    #else
+        #define LIBSPDM_ENABLE_MEASUREMENT_OPAQUE_DATA_EX 0
+    #endif
+#endif
+
 /* When LIBSPDM_RESPOND_IF_READY_SUPPORT is 0 then
  *      - For a Requester, if the Responder sends a ResponseNotReady ERROR response then the error
  *        is immediately returned to the Integrator. The Requester cannot send a RESPOND_IF_READY
