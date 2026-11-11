@@ -17,6 +17,7 @@
  **/
 
 #include "internal_crypt_lib.h"
+#include "hal/library/cryptlib_ext.h"
 
 #include <openssl/bn.h>
 #include <openssl/evp.h>
@@ -24,9 +25,33 @@
 #include <openssl/rsa.h>
 #include <openssl/param_build.h>
 #include <openssl/rand.h>
+#include <openssl/provider.h>
+#include <string.h>
 #include "key_context.h"
 
 #if (LIBSPDM_RSA_SSA_SUPPORT) || (LIBSPDM_RSA_PSS_SUPPORT)
+
+static bool libspdm_rsa_is_tpm2_key(const libspdm_key_context *ctx)
+{
+    const OSSL_PROVIDER *provider;
+
+    provider = EVP_PKEY_get0_provider(ctx->evp_pkey);
+    return (provider != NULL) && (strcmp(OSSL_PROVIDER_get0_name(provider), "tpm2") == 0);
+}
+
+static size_t libspdm_rsa_signature_size(libspdm_key_context *ctx)
+{
+    size_t size;
+
+    if (!libspdm_rsa_is_tpm2_key(ctx)) {
+        return (size_t)EVP_PKEY_size(ctx->evp_pkey);
+    }
+    /* The TPM provider may report its maximum, rather than the modulus size.
+     * The public-component size query returns false while setting size. */
+    size = 0;
+    libspdm_rsa_get_key(ctx, LIBSPDM_RSA_KEY_N, NULL, &size);
+    return size;
+}
 
 /**
  * Helper function to perform RSA signature with specified padding.
@@ -85,7 +110,10 @@ static bool libspdm_rsa_sign_with_padding(libspdm_key_context *ctx, const EVP_MD
             return false;
         }
         rc = EVP_PKEY_CTX_set_rsa_mgf1_md(pctx, evp_md);
-        if (rc != 1) {
+        /* TPM2 RSA-PSS fixes MGF1 to the signing hash; the tpm2 provider does not
+         * expose a separate MGF setting. Other providers must accept the setting. */
+        if ((rc != 1) &&
+            !((rc == -2) && libspdm_rsa_is_tpm2_key(ctx))) {
             EVP_PKEY_CTX_free(pctx);
             return false;
         }
@@ -409,7 +437,10 @@ bool libspdm_rsa_pkcs1_sign_with_nid(void *rsa_context, size_t hash_nid,
 
     /* Determine required signature size to match legacy behavior */
     {
-        size_t need = (size_t)EVP_PKEY_size(ctx->evp_pkey);
+        size_t need = libspdm_rsa_signature_size(ctx);
+        if (need == 0) {
+            return false;
+        }
         if ((signature == NULL) || (*sig_size < need)) {
             *sig_size = need;
             return false;
@@ -559,7 +590,10 @@ bool libspdm_rsa_pss_sign(void *rsa_context, size_t hash_nid,
 
     /* Determine required signature size to match legacy behavior */
     {
-        size_t need = (size_t)EVP_PKEY_size(ctx->evp_pkey);
+        size_t need = libspdm_rsa_signature_size(ctx);
+        if (need == 0) {
+            return false;
+        }
         if ((signature == NULL) || (*sig_size < need)) {
             *sig_size = need;
             return false;

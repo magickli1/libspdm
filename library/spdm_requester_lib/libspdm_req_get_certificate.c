@@ -90,6 +90,7 @@ static libspdm_return_t libspdm_try_get_large_certificate(libspdm_context_t *spd
     uint32_t max_cert_chain_size;
 
     /* -=[Check Parameters Phase]=- */
+    cert_model = SPDM_CERTIFICATE_INFO_CERT_MODEL_NONE;
     LIBSPDM_ASSERT(slot_id < SPDM_MAX_SLOT_COUNT);
     if (slot_storage_size_requested){
         LIBSPDM_ASSERT(slot_storage_size != NULL);
@@ -509,7 +510,15 @@ static libspdm_return_t libspdm_try_get_large_certificate(libspdm_context_t *spd
         libspdm_get_hash_size(spdm_context->connection_info.algorithm.base_hash_algo);
 
     libspdm_free_peer_leaf_cert_public_key(spdm_context, slot_id);
-    if (spdm_context->connection_info.algorithm.pqc_asym_algo != 0) {
+    if ((cert_model == SPDM_CERTIFICATE_INFO_CERT_MODEL_GENERIC_CERT) &&
+        (spdm_context->connection_info.peer_key_usage_bit_mask[slot_id] != 0) &&
+        ((spdm_context->connection_info.peer_key_usage_bit_mask[slot_id] &
+          (SPDM_KEY_USAGE_BIT_MASK_KEY_EX_USE | SPDM_KEY_USAGE_BIT_MASK_CHALLENGE_USE |
+           SPDM_KEY_USAGE_BIT_MASK_MEASUREMENT_USE | SPDM_KEY_USAGE_BIT_MASK_ENDPOINT_INFO_USE)) == 0)) {
+        /* A generic certificate used only outside SPDM does not need a cached SPDM
+         * signing key. Its application verifies the key and its usage independently. */
+        result = true;
+    } else if (spdm_context->connection_info.algorithm.pqc_asym_algo != 0) {
         result = libspdm_get_pqc_leaf_cert_public_key_from_cert_chain(
             spdm_context->connection_info.algorithm.base_hash_algo,
             spdm_context->connection_info.algorithm.pqc_asym_algo,

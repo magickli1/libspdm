@@ -5,6 +5,7 @@ add_executable(test_spdm_tpm)
 target_include_directories(test_spdm_tpm
     PRIVATE
         ${LIBSPDM_DIR}/include
+        ${LIBSPDM_DIR}/include/hal
         ${LIBSPDM_DIR}/unit_test/include
         ${LIBSPDM_DIR}/os_stub/spdm_device_secret_lib_tpm
         ${CMAKE_BINARY_DIR}/os_stub/spdm_device_secret_lib_tpm
@@ -43,3 +44,18 @@ target_link_libraries(test_spdm_tpm
         tss2-rc
 )
 
+# Intercept only the collector's TPM I/O; other tests retain the real backend.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TOOLCHAIN MATCHES "GCC|CLANG")
+    target_sources(test_spdm_tpm PRIVATE
+        test_tpm_pcr_collection.c
+        ${LIBSPDM_DIR}/os_stub/spdm_device_secret_lib_tpm/meas.c)
+    target_compile_definitions(test_spdm_tpm PRIVATE LIBSPDM_TPM_COLLECTION_TEST=1)
+    set_source_files_properties(
+        ${LIBSPDM_DIR}/os_stub/spdm_device_secret_lib_tpm/meas.c
+        PROPERTIES COMPILE_OPTIONS -fno-lto)
+    target_link_options(test_spdm_tpm PRIVATE
+        -Wl,--wrap=libspdm_tpm_device_init
+        -Wl,--wrap=libspdm_tpm_read_pcrs
+        -Wl,--wrap=libspdm_tpm_quote
+        -Wl,--wrap=libspdm_tpm_get_pub_key_handle)
+endif()

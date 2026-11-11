@@ -35,6 +35,29 @@ cmake -B build \
 | `LIBSPDM_TPM_RESPONDER_SLOT_IDS` | SPDM responder slot IDs that the following responder handles/certchains map to | Semicolon-separated decimal values, 0..7 |
 | `LIBSPDM_TPM_RESPONDER_HANDLES` | TPM persistent key handles for responder | Semicolon-separated hex values |
 | `LIBSPDM_TPM_RESPONDER_CERTCHAINS` | NV indices for responder certificate chains | Semicolon-separated hex values |
+| `LIBSPDM_TPM_IAK_SLOT_ID` | Responder slot that serves the restricted IAK certificate chain. The IAK only signs TPM2_Quote evidence, so this slot must not be in `LIBSPDM_TPM_RESPONDER_SLOT_IDS` | Decimal value, 1..7 (default `5`) |
+| `LIBSPDM_TPM_IAK_HANDLE` | TPM persistent handle of the restricted IAK | Hex value (default `0x81020001`) |
+| `LIBSPDM_TPM_IAK_CERTCHAIN` | NV index of the IAK certificate chain | Hex value (default `0x01C90100`) |
+| `LIBSPDM_TPM_ROOT_CERT` | Sample-specific NV index of the Root CA certificate (DER), used to assemble SPDM certificate chains | Hex value (sample default `0x1500000`; not a TCG-assigned Root CA index) |
+
+The TPM sample stores DER chains in the TCG "TPM 2.0 Keys for Device Identity and Attestation"
+range 0x01C90100-0x01C902FF (IAK chains from 0x01C90100, IDevID chains from 0x01C90200).
+It stores the leaf first and omits the Root CA, as recommended by section 7.3.2. The sample reads
+the Root CA from `LIBSPDM_TPM_ROOT_CERT` and builds its SPDM chain with the Root CA first.
+Other NV indices hold the chain in the SPDM order and are read as is.
+
+`LIBSPDM_TPM_ROOT_CERT` is a sample configuration, not a requirement of the TCG
+specification. Its default preserves the original provisioning script's Root CA
+NV address. TCG section 7.3.2 recommends omitting the Root CA from the DevID NV
+chains; it does not assign this separate Root CA address. The sample uses one
+Root CA for both the IDevID and IAK chains.
+
+A Root CA included in a received certificate chain does not establish trust.
+The requester must provision its trusted roots locally; the emulator uses the
+existing root-certificate callbacks to populate `LIBSPDM_DATA_PEER_PUBLIC_ROOT_CERT`.
+
+The TCG vendor ID of the TPM Quote OpaqueData element is the compile-time definition
+`LIBSPDM_TPM_QUOTE_TCG_VENDOR_ID` (default `0x0000`, `library/spdm_tpm_quote_opaque.h`).
 
 **Note:** The `*_SLOT_IDS`, `*_HANDLES`, and `*_CERTCHAINS` lists are mapped by entry position. For example, `LIBSPDM_TPM_RESPONDER_SLOT_IDS="0;1;4"` maps the first responder handle/certchain pair to slot 0, the second pair to slot 1, and the third pair to slot 4. This supports empty/non-contiguous SPDM slots.
 
@@ -55,9 +78,15 @@ The TPM integration layer provides:
 - Private key protection (keys never leave TPM)
 - Public key access for SPDM flows
 - PCR reads for measurements
+- TPM2_Quote evidence for the PCR measurements, signed by a restricted IAK
 - NV storage access for certificates/config
 
 These APIs are designed to plug into libspdm cryptographic and measurement flows.
+
+The TPM device-secret sample shares Quote and key-pair state across SPDM contexts and is not
+thread-safe. Callers must serialize each measurement operation from
+`libspdm_measurement_collection()` through `libspdm_measurement_opaque_data()`, and serialize
+key-pair initialization and access.
 
 ---
 
@@ -133,6 +162,67 @@ if (!libspdm_tpm_read_pcr(SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_256,
 - `hash_algo`: the PCR bank, as an SPDM `MeasurementHashAlgo` value
 - `index`: PCR number
 
+To read several PCRs in one consistent snapshot, for example the PCRs that a TPM2_Quote attests:
+
+```c
+uint8_t pcrs[] = {0, 1, 7};
+uint8_t values[3 * 32];
+size_t values_size = sizeof(values);
+
+if (!libspdm_tpm_read_pcrs(SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_256, pcrs, 3,
+                           values, &values_size)) {
+    printf("Failed to read PCRs\n");
+    return -1;
+}
+```
+
+- `pcr_indices`: strictly ascending PCR numbers (0..23)
+- `pcr_values`: the digests, concatenated in `pcr_indices` order; with `NULL` the function
+  returns the required size in `pcr_values_size`
+
+---
+
+## TPM Quote Evidence for Measurements
+
+The implementation-defined Quote element has an 8-byte header: `version`, `iak_slot_id`,
+little-endian `attest_size`, `signature_size`, and `key_proof_size`. The header is followed by
+the marshaled `TPM2B_ATTEST`, `TPMT_SIGNATURE`, and the reserved `key_proof` bytes, respectively.
+`key_proof_size` is currently zero. The field reserves space for IAK certification of a temporary
+SPDM signing key when no IDevID is available; that authentication flow and the proof payload
+format are not implemented. Decoders reject non-empty key proofs. The element version is 1.
+
+The TPM sample reports PCR 0..14 as measurement blocks (`library/spdm_tpm_pcr.h`: PCR n at
+measurement index n + 1, so index 1..15). Index 0x10 (SVN) and 0x11 (HEM) remain non-PCR blocks;
+PCR 15 is not reported yet. For a GET_MEASUREMENTS that requests a signature,
+`libspdm_measurement_collection()` also produces a TPM2_Quote of the reported PCRs:
+
+1. `libspdm_tpm_read_pcrs()` reads the reported PCRs in one snapshot.
+2. `libspdm_tpm_quote()` quotes the same PCRs with the restricted IAK
+   (`LIBSPDM_TPM_HANDLE_IAK`); the qualifying data is the requester nonce.
+3. `libspdm_tpm_verify_quote_pcrs()` checks the Quote against the snapshot with the IAK public key.
+   If a PCR was extended in between, the collection is repeated a bounded number of times and
+   then fails, so the measurement record and the Quote always describe the same PCR state.
+4. `libspdm_tpm_quote_opaque_encode()` encodes the Quote as one `SPDM_REGISTRY_ID_TCG` element of
+   the general opaque data table (OpaqueDataFmt1). `libspdm_measurement_opaque_data()` returns it
+   for that response only.
+
+The Quote is extra evidence: `MEASUREMENTS.Signature` is still made with the SPDM signing key.
+The element layout is in `library/spdm_tpm_quote_opaque.h`.
+
+A Requester verifies the evidence with:
+
+| API | Purpose |
+| --- | ------- |
+| `libspdm_tpm_quote_opaque_decode()` | Strictly parse the OpaqueData element; returns the IAK slot and the Quote |
+| `libspdm_tpm_verify_quote_measurement_record()` | Verify the Quote signature, its nonce, and that it attests exactly the PCR blocks of the measurement record |
+| `libspdm_tpm_verify_quote_pcrs()` | Verify a Quote against a known PCR list and values |
+| `libspdm_tpm_get_cert_device_identity()` | Extract the TCG TPM hardware identity and restricted-key assertion from a certificate with valid TPM protection policies. Callers authenticate the certificate chains and compare the identities to bind IAK and IDevID |
+| `libspdm_tpm_get_public_key_from_cert()` | Extract an RSA or NIST EC public key and a compatible SPDM algorithm identifier from a DER certificate, independently of negotiation; certificate authentication remains the caller's responsibility |
+
+Which slots to trust and how to compare the certificate identities is verifier policy, left to the
+caller. `libspdm_tpm_get_pub_key_handle()` returns the public part of a TPM key handle as a
+software key, for example to verify a Quote locally.
+
 ---
 
 ## Reading TPM NV Storage
@@ -160,9 +250,9 @@ generates as `LIBSPDM_TPM_HANDLE_*_CERTCHAIN_SLOT_n`.
 
 | SPDM Operation   | TPM API                          |
 | ---------------- | -------------------------------- |
-| `CERTIFICATE`    | `libspdm_tpm_read_nv`            |
+| `CERTIFICATE`    | `libspdm_tpm_read_nv` (IAK chain on `LIBSPDM_TPM_IAK_SLOT_ID`) |
 | `CHALLENGE_AUTH` | `libspdm_tpm_get_pvt_key_handle` |
-| `MEASUREMENTS`   | `libspdm_tpm_read_pcr`           |
+| `MEASUREMENTS`   | `libspdm_tpm_read_pcrs`; OpaqueData: `libspdm_tpm_quote` |
 | `KEY_EXCHANGE`   | TPM-backed keys                  |
 
 ---

@@ -38,29 +38,9 @@ fi
 # Check if swtpm and tpm2-tools are available
 if ! command -v swtpm >/dev/null 2>&1 || ! command -v tpm2_startup >/dev/null 2>&1; then
     echo "[WARN] swtpm or tpm2-tools not installed. Running offline tests only..."
-    "${TEST_BIN}"
+    env -u TPM2TOOLS_TCTI -u TPM2OPENSSL_TCTI "${TEST_BIN}"
     exit $?
 fi
-
-# Find two adjacent free TCP ports for swtpm (tcti-swtpm uses server_port + 1 for ctrl)
-PORTS=$(python3 -c '
-import socket
-for p in range(2321, 60000):
-    try:
-        s1 = socket.socket()
-        s1.bind(("", p))
-        s2 = socket.socket()
-        s2.bind(("", p + 1))
-        s1.close()
-        s2.close()
-        print(f"{p} {p+1}")
-        break
-    except:
-        continue
-')
-
-SERVER_PORT=$(echo "${PORTS}" | cut -d' ' -f1)
-CTRL_PORT=$(echo "${PORTS}" | cut -d' ' -f2)
 
 TPM_DIR=$(mktemp -d -t tpm_test_XXXXXX)
 SWTPM_PID=""
@@ -76,20 +56,27 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "[INFO] Starting swtpm on port ${SERVER_PORT} (ctrl: ${CTRL_PORT})..."
+echo "[INFO] Starting private swtpm..."
 swtpm socket \
     --tpmstate dir="${TPM_DIR}" \
     --tpm2 \
-    --ctrl type=tcp,port="${CTRL_PORT}" \
-    --server type=tcp,port="${SERVER_PORT}" \
+    --ctrl type=unixio,path="${TPM_DIR}/tpm.sock.ctrl" \
+    --server type=unixio,path="${TPM_DIR}/tpm.sock" \
     --flags not-need-init &
 SWTPM_PID=$!
 
-# Wait briefly for swtpm socket readiness
-sleep 0.5
+# Wait for both sockets, and fail if the private simulator exits.
+for ((attempt = 0; attempt < 50; attempt++)); do
+    kill -0 "${SWTPM_PID}"
+    if [ -S "${TPM_DIR}/tpm.sock" ] && [ -S "${TPM_DIR}/tpm.sock.ctrl" ]; then
+        break
+    fi
+    sleep 0.1
+done
+[ -S "${TPM_DIR}/tpm.sock" ] && [ -S "${TPM_DIR}/tpm.sock.ctrl" ]
 
-export TPM2TOOLS_TCTI="swtpm:port=${SERVER_PORT}"
-export TPM2OPENSSL_TCTI="swtpm:port=${SERVER_PORT}"
+export TPM2TOOLS_TCTI="swtpm:path=${TPM_DIR}/tpm.sock"
+export TPM2OPENSSL_TCTI="swtpm:path=${TPM_DIR}/tpm.sock"
 
 echo "[INFO] Initializing TPM simulator..."
 tpm2_startup -c
@@ -117,6 +104,27 @@ tpm2_import -C 0x81000000 -G ecc256:ecdsa -i "${REQ_KEY}" -u "${TPM_DIR}/req.pub
 tpm2_flushcontext -t
 tpm2_load -C 0x81000000 -u "${TPM_DIR}/req.pub" -r "${TPM_DIR}/req.priv" -c "${TPM_DIR}/req.ctx"
 tpm2_evictcontrol -C o -c "${TPM_DIR}/req.ctx" 0x81000011
+tpm2_flushcontext -t
+
+echo "[INFO] Provisioning restricted IAK 0x81020001..."
+tpm2_createprimary -C e -g sha256 -G ecc256:ecdsa-sha256:null \
+    -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|sign' \
+    -c "${TPM_DIR}/iak.ctx"
+tpm2_evictcontrol -C o -c "${TPM_DIR}/iak.ctx" 0x81020001
+tpm2_flushcontext -t
+
+echo "[INFO] Provisioning restricted RSA-PSS test IAK 0x81020002..."
+tpm2_createprimary -C e -g sha256 -G rsa2048:rsapss-sha256:null \
+    -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|sign' \
+    -c "${TPM_DIR}/rsa_iak.ctx"
+tpm2_evictcontrol -C o -c "${TPM_DIR}/rsa_iak.ctx" 0x81020002
+tpm2_flushcontext -t
+
+echo "[INFO] Provisioning RSA signing test key 0x81020003..."
+tpm2_createprimary -C o -g sha256 -G rsa2048:null:null \
+    -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign' \
+    -c "${TPM_DIR}/rsa_sign.ctx"
+tpm2_evictcontrol -C o -c "${TPM_DIR}/rsa_sign.ctx" 0x81020003
 tpm2_flushcontext -t
 
 echo "[INFO] Provisioning Certificate NV Indices (0x1500021 and 0x1500011)..."

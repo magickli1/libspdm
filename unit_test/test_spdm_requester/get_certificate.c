@@ -4416,6 +4416,8 @@ static void req_get_certificate_case30(void **state)
      * In all cases, the certificate model for slot 0 shall be either the device certificate model or the alias certificate model*/
     spdm_context->connection_info.multi_key_conn_rsp = true;
     spdm_context->connection_info.peer_cert_info[1] = 0;
+    spdm_context->connection_info.peer_key_usage_bit_mask[1] =
+        SPDM_KEY_USAGE_BIT_MASK_STANDARDS_KEY_USE;
     m_cert_model = SPDM_CERTIFICATE_INFO_CERT_MODEL_GENERIC_CERT;
     libspdm_reset_message_b(spdm_context);
     m_slot_id = 1;
@@ -4426,6 +4428,9 @@ static void req_get_certificate_case30(void **state)
     status = libspdm_get_certificate(spdm_context, NULL, m_slot_id, &cert_chain_size, cert_chain);
     assert_int_equal(status, LIBSPDM_STATUS_SUCCESS);
     assert_int_equal(spdm_context->connection_info.peer_cert_info[1], m_cert_model);
+#if !LIBSPDM_RECORD_TRANSCRIPT_DATA_SUPPORT
+    assert_null(spdm_context->connection_info.peer_used_cert_chain[1].leaf_cert_public_key);
+#endif
     assert_int_equal(cert_chain_size, m_libspdm_local_certificate_chain_size);
     assert_memory_equal(cert_chain, m_libspdm_local_certificate_chain,
                         m_libspdm_local_certificate_chain_size);
