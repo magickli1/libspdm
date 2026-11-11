@@ -11,6 +11,7 @@
 
 #include <openssl/provider.h>
 #include <openssl/store.h>
+#include <openssl/x509.h>
 #include <tss2/tss2_tcti.h>
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_tpm2_types.h>
@@ -20,6 +21,7 @@
 #include "industry_standard/spdm.h"
 #include "industry_standard/spdm_secured_message.h"
 
+#include <openssl/rsa.h>
 #include "../key_context.h"
 
 bool g_tpm_device_initialized = false;
@@ -60,6 +62,27 @@ bool libspdm_tpm_device_init()
     return true;
 }
 
+/* Public part of a (TPM-backed) key as a software key: SubjectPublicKeyInfo round trip. */
+static EVP_PKEY *tpm_public_part(EVP_PKEY *pkey)
+{
+    unsigned char *der = NULL;
+    const unsigned char *ptr;
+    EVP_PKEY *public_key = NULL;
+    int der_size;
+
+    if (pkey == NULL) {
+        return NULL;
+    }
+    der_size = i2d_PUBKEY(pkey, &der);
+    if (der_size <= 0) {
+        return NULL;
+    }
+    ptr = der;
+    public_key = d2i_PUBKEY(NULL, &ptr, der_size);
+    OPENSSL_free(der);
+    return public_key;
+}
+
 static bool get_keyinfo(const char *handle, void **context, int keyinfo_type)
 {
     OSSL_STORE_CTX *store_ctx = NULL;
@@ -91,6 +114,14 @@ static bool get_keyinfo(const char *handle, void **context, int keyinfo_type)
                 *context = OSSL_STORE_INFO_get1_CERT(info);
                 break;
             }
+            OSSL_STORE_INFO_free(info);
+            break;
+        }
+        /* The tpm2 provider returns a TPM key handle as PKEY only. For a public key, export
+         * its public part, so the result is a plain software public key. */
+        if ((keyinfo_type == OSSL_STORE_INFO_PUBKEY) &&
+            (OSSL_STORE_INFO_get_type(info) == OSSL_STORE_INFO_PKEY)) {
+            *context = tpm_public_part(OSSL_STORE_INFO_get0_PKEY(info));
             OSSL_STORE_INFO_free(info);
             break;
         }
@@ -145,6 +176,78 @@ bool libspdm_tpm_get_pub_key_handle(const void *handle, void **context)
         return false;
     }
     return true;
+}
+
+bool libspdm_tpm_get_key_info(const void *handle, uint32_t *asym_algo,
+                              void *public_key_info, size_t *public_key_info_size)
+{
+    libspdm_key_context *context;
+    EVP_PKEY *key;
+    X509_PUBKEY *spki;
+    X509_ALGOR *algorithm;
+    unsigned char *output;
+    char group[32];
+    size_t group_size;
+    int size;
+    int bits;
+    bool result;
+
+    if ((handle == NULL) || (asym_algo == NULL) || (public_key_info_size == NULL)) {
+        return false;
+    }
+    if (!libspdm_tpm_device_init() ||
+        !libspdm_tpm_get_pub_key_handle(handle, (void **)&context)) {
+        return false;
+    }
+    key = context->evp_pkey;
+    spki = NULL;
+    result = false;
+    *asym_algo = 0;
+    if ((EVP_PKEY_get_base_id(key) == EVP_PKEY_RSA) ||
+        (EVP_PKEY_get_base_id(key) == EVP_PKEY_RSA_PSS)) {
+        bits = EVP_PKEY_get_bits(key);
+        switch (bits) {
+        case 2048: *asym_algo = SPDM_KEY_PAIR_ASYM_ALGO_CAP_RSA2048; break;
+        case 3072: *asym_algo = SPDM_KEY_PAIR_ASYM_ALGO_CAP_RSA3072; break;
+        case 4096: *asym_algo = SPDM_KEY_PAIR_ASYM_ALGO_CAP_RSA4096; break;
+        default: goto done;
+        }
+    } else if (EVP_PKEY_get_base_id(key) == EVP_PKEY_EC) {
+        if (EVP_PKEY_get_group_name(key, group, sizeof(group), &group_size) != 1) {
+            goto done;
+        }
+        if (strcmp(group, "prime256v1") == 0) {
+            *asym_algo = SPDM_KEY_PAIR_ASYM_ALGO_CAP_ECC256;
+        } else if (strcmp(group, "secp384r1") == 0) {
+            *asym_algo = SPDM_KEY_PAIR_ASYM_ALGO_CAP_ECC384;
+        } else if (strcmp(group, "secp521r1") == 0) {
+            *asym_algo = SPDM_KEY_PAIR_ASYM_ALGO_CAP_ECC521;
+        } else {
+            goto done;
+        }
+    } else {
+        goto done;
+    }
+    if ((X509_PUBKEY_set(&spki, key) != 1) ||
+        (X509_PUBKEY_get0_param(NULL, NULL, NULL, &algorithm, spki) != 1)) {
+        goto done;
+    }
+    size = i2d_X509_ALGOR(algorithm, NULL);
+    if (size <= 0) {
+        goto done;
+    }
+    if ((public_key_info == NULL) || (*public_key_info_size < (size_t)size)) {
+        *public_key_info_size = (size_t)size;
+        goto done;
+    }
+    output = public_key_info;
+    result = i2d_X509_ALGOR(algorithm, &output) == size;
+    *public_key_info_size = (size_t)size;
+done:
+    X509_PUBKEY_free(spki);
+    EVP_PKEY_free(context->evp_pkey);
+    free(context);
+    return result;
 }
 
 bool libspdm_tpm_read_pcr(uint32_t hash_algo, uint32_t index, void *buffer, size_t *size)
@@ -498,8 +601,11 @@ bool libspdm_tpm_quote(
 
     memset(&qual_data, 0, sizeof(qual_data));
     if (nonce != NULL && nonce_size > 0) {
-        qual_data.size = (UINT16)(nonce_size > sizeof(qual_data.buffer) ?
-                                  sizeof(qual_data.buffer) : nonce_size);
+        /* Never truncate the freshness value. */
+        if (nonce_size > sizeof(qual_data.buffer)) {
+            return false;
+        }
+        qual_data.size = (UINT16)nonce_size;
         memcpy(qual_data.buffer, nonce, qual_data.size);
     }
 
@@ -756,4 +862,380 @@ bool libspdm_tpm_verify_quote(
     }
 
     return false;
+}
+
+/* ---------------------------------------------------------------------------------------------
+* PCR snapshot, strict Quote verification and the Quote OpaqueData element (DMTF/libspdm#3721)
+* ------------------------------------------------------------------------------------------- */
+
+#define LIBSPDM_TPM_PCR_MAX 24
+#define LIBSPDM_TPM_PCR_READ_RETRIES 4
+
+static bool tpm_pcr_bank(uint32_t meas_hash_algo, TPMI_ALG_HASH *bank, size_t *digest_size)
+{
+    if (!map_spdm_meas_hash_to_tpm(meas_hash_algo, bank)) {
+        return false;
+    }
+    switch (*bank) {
+    case TPM2_ALG_SHA256:
+    case TPM2_ALG_SM3_256:
+        *digest_size = 32;
+        return true;
+    case TPM2_ALG_SHA384:
+        *digest_size = 48;
+        return true;
+    case TPM2_ALG_SHA512:
+        *digest_size = 64;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Strictly ascending PCR list -> 3-byte PCR select bitmap. */
+static bool tpm_pcr_bitmap(const uint8_t *pcr_indices, size_t pcr_count, uint8_t bitmap[3])
+{
+    size_t i;
+
+    if ((pcr_indices == NULL) || (pcr_count == 0) || (pcr_count > LIBSPDM_TPM_PCR_MAX)) {
+        return false;
+    }
+    memset(bitmap, 0, 3);
+    for (i = 0; i < pcr_count; i++) {
+        if ((pcr_indices[i] >= LIBSPDM_TPM_PCR_MAX) ||
+            ((i > 0) && (pcr_indices[i] <= pcr_indices[i - 1]))) {
+            return false;
+        }
+        bitmap[pcr_indices[i] / 8] |= (uint8_t)(1 << (pcr_indices[i] % 8));
+    }
+    return true;
+}
+
+bool libspdm_tpm_read_pcrs(uint32_t hash_algo, const uint8_t *pcr_indices, size_t pcr_count,
+                           void *pcr_values, size_t *pcr_values_size)
+{
+    TSS2_RC rc;
+    TSS2_TCTI_CONTEXT *tcti = NULL;
+    ESYS_CONTEXT *esys = NULL;
+    TPMI_ALG_HASH bank;
+    size_t digest_size;
+    size_t required_size;
+    uint8_t wanted[3];
+    uint8_t remaining[3];
+    TPML_PCR_SELECTION selection;
+    TPML_PCR_SELECTION *selection_out;
+    TPML_DIGEST *digests;
+    UINT32 update_counter;
+    UINT32 first_counter;
+    size_t attempt;
+    size_t pos;
+    size_t d;
+    uint8_t pcr;
+    bool first;
+    bool restart;
+    bool result;
+
+    if ((pcr_values_size == NULL) || !tpm_pcr_bank(hash_algo, &bank, &digest_size) ||
+        !tpm_pcr_bitmap(pcr_indices, pcr_count, wanted)) {
+        return false;
+    }
+    required_size = pcr_count * digest_size;
+    if (pcr_values == NULL) {
+        *pcr_values_size = required_size;
+        return true;
+    }
+    if (*pcr_values_size < required_size) {
+        *pcr_values_size = required_size;
+        return false;
+    }
+
+    if (Tss2_TctiLdr_Initialize(getenv("TPM2TOOLS_TCTI"), &tcti) != TSS2_RC_SUCCESS) {
+        return false;
+    }
+    if (Esys_Initialize(&esys, tcti, NULL) != TSS2_RC_SUCCESS) {
+        Tss2_TctiLdr_Finalize(&tcti);
+        return false;
+    }
+
+    result = false;
+    for (attempt = 0; (attempt < LIBSPDM_TPM_PCR_READ_RETRIES) && !result; attempt++) {
+        memcpy(remaining, wanted, sizeof(remaining));
+        first = true;
+        first_counter = 0;
+        restart = false;
+        while ((remaining[0] | remaining[1] | remaining[2]) != 0) {
+            memset(&selection, 0, sizeof(selection));
+            selection.count = 1;
+            selection.pcrSelections[0].hash = bank;
+            selection.pcrSelections[0].sizeofSelect = 3;
+            memcpy(selection.pcrSelections[0].pcrSelect, remaining, sizeof(remaining));
+            selection_out = NULL;
+            digests = NULL;
+            rc = Esys_PCR_Read(esys, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, &selection,
+                               &update_counter, &selection_out, &digests);
+            if (rc != TSS2_RC_SUCCESS) {
+                Esys_Free(selection_out);
+                Esys_Free(digests);
+                goto out;
+            }
+            if (first) {
+                first_counter = update_counter;
+                first = false;
+            } else if (update_counter != first_counter) {
+                /* A PCR was extended between the reads: start over for one snapshot. */
+                restart = true;
+            }
+            d = 0;
+            if (!restart && (selection_out->count == 1) &&
+                (selection_out->pcrSelections[0].hash == bank)) {
+                for (pcr = 0; pcr < LIBSPDM_TPM_PCR_MAX; pcr++) {
+                    if ((selection_out->pcrSelections[0].sizeofSelect <= pcr / 8) ||
+                        ((selection_out->pcrSelections[0].pcrSelect[pcr / 8] &
+                          (1 << (pcr % 8))) == 0)) {
+                        continue;
+                    }
+                    if ((d >= digests->count) || (digests->digests[d].size != digest_size) ||
+                        ((remaining[pcr / 8] & (1 << (pcr % 8))) == 0)) {
+                        d = 0;
+                        break;
+                    }
+                    for (pos = 0; pcr_indices[pos] != pcr; pos++) {
+                    }
+                    memcpy((uint8_t *)pcr_values + pos * digest_size,
+                           digests->digests[d].buffer, digest_size);
+                    remaining[pcr / 8] &= (uint8_t) ~(1 << (pcr % 8));
+                    d++;
+                }
+            }
+            Esys_Free(selection_out);
+            Esys_Free(digests);
+            if (restart) {
+                break;
+            }
+            if (d == 0) {
+                /* No progress: the bank or a PCR is not allocated. */
+                goto out;
+            }
+        }
+        result = !restart;
+    }
+    if (result) {
+        *pcr_values_size = required_size;
+    }
+
+out:
+    Esys_Finalize(&esys);
+    Tss2_TctiLdr_Finalize(&tcti);
+    return result;
+}
+
+/* ECDSA r||s, each left-padded to the curve size. */
+static bool tpm_ecdsa_raw_signature(const TPMT_SIGNATURE *sig, size_t half_size,
+                                    uint8_t *raw, size_t raw_capacity)
+{
+    const TPM2B_ECC_PARAMETER *part[2] = {&sig->signature.ecdsa.signatureR,
+                                          &sig->signature.ecdsa.signatureS};
+    const uint8_t *value;
+    size_t size;
+    size_t i;
+
+    if (raw_capacity < 2 * half_size) {
+        return false;
+    }
+    memset(raw, 0, 2 * half_size);
+    for (i = 0; i < 2; i++) {
+        value = part[i]->buffer;
+        size = part[i]->size;
+        while ((size > half_size) && (value[0] == 0)) {
+            value++;
+            size--;
+        }
+        if (size > half_size) {
+            return false;
+        }
+        memcpy(raw + i * half_size + (half_size - size), value, size);
+    }
+    return true;
+}
+
+bool libspdm_tpm_verify_quote_pcrs(
+    const void *pub_key_context,
+    const void *quote_buffer,
+    size_t quote_buffer_size,
+    const uint8_t *expected_nonce,
+    size_t expected_nonce_size,
+    uint32_t pcr_hash_algo,
+    const uint8_t *pcr_indices,
+    size_t pcr_count,
+    const void *pcr_values,
+    size_t pcr_values_size)
+{
+    TPM2B_ATTEST attest;
+    TPMS_ATTEST tpms_attest;
+    TPMT_SIGNATURE sig;
+    size_t offset;
+    size_t attest_offset;
+    TPMI_ALG_HASH bank;
+    TPMI_ALG_HASH sig_hash;
+    size_t digest_size;
+    uint8_t bitmap[3];
+    const TPMS_PCR_SELECTION *quoted;
+    uint32_t base_hash;
+    size_t hash_size;
+    uint8_t attest_hash[LIBSPDM_MAX_HASH_SIZE];
+    uint8_t pcr_digest[LIBSPDM_MAX_HASH_SIZE];
+    uint8_t raw_sig[132];
+    const uint8_t *sig_value;
+    size_t sig_size;
+    EVP_PKEY *pkey;
+    int bits;
+    uint32_t asym;
+    size_t i;
+
+    if ((pub_key_context == NULL) || (quote_buffer == NULL) || (quote_buffer_size == 0) ||
+        (expected_nonce == NULL) || (expected_nonce_size == 0) ||
+        (expected_nonce_size > sizeof(tpms_attest.extraData.buffer)) || (pcr_values == NULL) ||
+        !tpm_pcr_bank(pcr_hash_algo, &bank, &digest_size) ||
+        !tpm_pcr_bitmap(pcr_indices, pcr_count, bitmap) ||
+        (pcr_values_size != pcr_count * digest_size)) {
+        return false;
+    }
+
+    /* MU(TPM2B_ATTEST) || MU(TPMT_SIGNATURE), nothing else. */
+    offset = 0;
+    if ((Tss2_MU_TPM2B_ATTEST_Unmarshal(quote_buffer, quote_buffer_size, &offset,
+                                        &attest) != TSS2_RC_SUCCESS) ||
+        (Tss2_MU_TPMT_SIGNATURE_Unmarshal(quote_buffer, quote_buffer_size, &offset,
+                                          &sig) != TSS2_RC_SUCCESS) ||
+        (offset != quote_buffer_size)) {
+        return false;
+    }
+    attest_offset = 0;
+    if ((Tss2_MU_TPMS_ATTEST_Unmarshal(attest.attestationData, attest.size, &attest_offset,
+                                       &tpms_attest) != TSS2_RC_SUCCESS) ||
+        (attest_offset != attest.size)) {
+        return false;
+    }
+    if ((tpms_attest.magic != TPM2_GENERATED_VALUE) ||
+        (tpms_attest.type != TPM2_ST_ATTEST_QUOTE)) {
+        return false;
+    }
+
+    /* Freshness */
+    if ((tpms_attest.extraData.size != expected_nonce_size) ||
+        !libspdm_consttime_is_mem_equal(tpms_attest.extraData.buffer, expected_nonce,
+                                        expected_nonce_size)) {
+        return false;
+    }
+
+    /* Exactly the expected PCRs of the expected bank */
+    if (tpms_attest.attested.quote.pcrSelect.count != 1) {
+        return false;
+    }
+    quoted = &tpms_attest.attested.quote.pcrSelect.pcrSelections[0];
+    if ((quoted->hash != bank) || (quoted->sizeofSelect < 3)) {
+        return false;
+    }
+    for (i = 0; i < quoted->sizeofSelect; i++) {
+        if (quoted->pcrSelect[i] != (i < 3 ? bitmap[i] : 0)) {
+            return false;
+        }
+    }
+
+    /* Signature scheme -> hash */
+    switch (sig.sigAlg) {
+    case TPM2_ALG_ECDSA:
+        sig_hash = sig.signature.ecdsa.hash;
+        break;
+    case TPM2_ALG_RSASSA:
+        sig_hash = sig.signature.rsassa.hash;
+        break;
+    case TPM2_ALG_RSAPSS:
+        sig_hash = sig.signature.rsapss.hash;
+        break;
+    default:
+        return false;
+    }
+    base_hash = map_tpm_hash_to_base_hash(sig_hash);
+    hash_size = libspdm_get_hash_size(base_hash);
+    if ((base_hash == 0) || (hash_size == 0) || (hash_size > sizeof(attest_hash))) {
+        return false;
+    }
+
+    /* pcrDigest = H_sign(PCR values in selection order) */
+    if ((tpms_attest.attested.quote.pcrDigest.size != hash_size) ||
+        !libspdm_hash_all(base_hash, pcr_values, pcr_values_size, pcr_digest) ||
+        !libspdm_consttime_is_mem_equal(tpms_attest.attested.quote.pcrDigest.buffer,
+                                        pcr_digest, hash_size)) {
+        return false;
+    }
+
+    if (!libspdm_hash_all(base_hash, attest.attestationData, attest.size, attest_hash)) {
+        return false;
+    }
+
+    /* The asymmetric algorithm follows the Quote key, not the SPDM negotiation. */
+    pkey = ((const libspdm_key_context *)pub_key_context)->evp_pkey;
+    if (pkey == NULL) {
+        return false;
+    }
+    bits = EVP_PKEY_get_bits(pkey);
+    switch (EVP_PKEY_get_base_id(pkey)) {
+    case EVP_PKEY_EC:
+        if (sig.sigAlg != TPM2_ALG_ECDSA) {
+            return false;
+        }
+        switch (bits) {
+        case 256:
+            asym = SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_ECDSA_ECC_NIST_P256;
+            break;
+        case 384:
+            asym = SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_ECDSA_ECC_NIST_P384;
+            break;
+        case 521:
+            asym = SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_ECDSA_ECC_NIST_P521;
+            break;
+        default:
+            return false;
+        }
+        sig_size = 2 * (size_t)((bits + 7) / 8);
+        if (!tpm_ecdsa_raw_signature(&sig, sig_size / 2, raw_sig, sizeof(raw_sig))) {
+            return false;
+        }
+        sig_value = raw_sig;
+        break;
+    case EVP_PKEY_RSA:
+    case EVP_PKEY_RSA_PSS:
+        if (sig.sigAlg == TPM2_ALG_ECDSA) {
+            return false;
+        }
+        switch (bits) {
+        case 2048:
+            asym = (sig.sigAlg == TPM2_ALG_RSAPSS) ?
+                   SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_RSAPSS_2048 :
+                   SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_RSASSA_2048;
+            break;
+        case 3072:
+            asym = (sig.sigAlg == TPM2_ALG_RSAPSS) ?
+                   SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_RSAPSS_3072 :
+                   SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_RSASSA_3072;
+            break;
+        case 4096:
+            asym = (sig.sigAlg == TPM2_ALG_RSAPSS) ?
+                   SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_RSAPSS_4096 :
+                   SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_RSASSA_4096;
+            break;
+        default:
+            return false;
+        }
+        sig_value = sig.signature.rsassa.sig.buffer;
+        sig_size = sig.signature.rsassa.sig.size;
+        break;
+    default:
+        return false;
+    }
+
+    /* spdm_version 0: verify the raw digest, without the SPDM signing context. */
+    return libspdm_asym_verify_hash(0, 0, asym, base_hash, (void *)(size_t)pub_key_context,
+                                    attest_hash, hash_size, sig_value, sig_size);
 }

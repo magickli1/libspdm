@@ -261,6 +261,13 @@ uint8_t libspdm_get_key_pair_id_by_slot(uint32_t base_asym_algo, uint32_t pqc_as
                                         uint8_t slot_id);
 #endif
 
+#if LIBSPDM_TPM_SUPPORT
+/* KeyPairID is local to an endpoint, not a certificate SlotID. */
+uint8_t libspdm_tpm_get_key_pair_id_by_slot(bool requester, uint32_t base_asym_algo,
+                                            uint32_t pqc_asym_algo, uint8_t slot_id);
+const void *libspdm_tpm_get_signing_key_handle(bool requester, uint8_t key_pair_id);
+#endif
+
 /* External*/
 
 bool libspdm_read_input_file(const char *file_name, void **file_data,

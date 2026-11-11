@@ -106,9 +106,28 @@ endif()
 libspdm_validate_tpm_slot_ids("LIBSPDM_TPM_REQUESTER_SLOT_IDS" "${LIBSPDM_TPM_REQUESTER_SLOT_IDS}" REQUESTER_SUPPORTED_SLOT_MASK)
 libspdm_validate_tpm_slot_ids("LIBSPDM_TPM_RESPONDER_SLOT_IDS" "${LIBSPDM_TPM_RESPONDER_SLOT_IDS}" RESPONDER_SUPPORTED_SLOT_MASK)
 
+# Restricted IAK used only for TPM2_Quote evidence in MEASUREMENTS.OpaqueData. Its certificate
+# chain is served on a dedicated SPDM slot that is never an SPDM signing slot.
+# Defaults follow TCG "TPM 2.0 Keys for Device Identity and Attestation" v1.10:
+# IAK handle 0x81020001 (sec. 7.3.1), IAK certificate chain NV 0x01C90100 (sec. 7.3.2).
+set(LIBSPDM_TPM_IAK_SLOT_ID "5" CACHE STRING "SPDM slot ID of the TPM IAK certificate chain")
+set(LIBSPDM_TPM_IAK_HANDLE "0x81020001" CACHE STRING "TPM persistent handle of the restricted IAK")
+set(LIBSPDM_TPM_IAK_CERTCHAIN "0x01C90100" CACHE STRING "TPM NV index of the IAK certificate chain")
+# TCG DevID chains (NV 0x01C90100-0x01C902FF) do not contain the Root CA certificate; it is
+# read from this NV index to build the SPDM certificate chain.
+set(LIBSPDM_TPM_ROOT_CERT "0x1500000" CACHE STRING "TPM NV index of the Root CA certificate (DER)")
+
+if(LIBSPDM_TPM_IAK_SLOT_ID LESS 1 OR LIBSPDM_TPM_IAK_SLOT_ID GREATER 7)
+    message(FATAL_ERROR "LIBSPDM_TPM_IAK_SLOT_ID ${LIBSPDM_TPM_IAK_SLOT_ID} is invalid. Valid IAK slot IDs are 1..7")
+endif()
+if(";${LIBSPDM_TPM_RESPONDER_SLOT_IDS};" MATCHES ";${LIBSPDM_TPM_IAK_SLOT_ID};")
+    message(FATAL_ERROR "LIBSPDM_TPM_IAK_SLOT_ID ${LIBSPDM_TPM_IAK_SLOT_ID} must not be an SPDM signing slot (LIBSPDM_TPM_RESPONDER_SLOT_IDS)")
+endif()
+
 message(STATUS "TPM Configuration:")
 message(STATUS "  Requester configured slots: ${LIBSPDM_TPM_REQUESTER_SLOT_IDS}")
 message(STATUS "  Responder configured slots: ${LIBSPDM_TPM_RESPONDER_SLOT_IDS}")
+message(STATUS "  Responder IAK slot: ${LIBSPDM_TPM_IAK_SLOT_ID}")
 
 # Generate keys.h content dynamically
 set(KEYS_H_CONTENT "/**\n")
@@ -146,6 +165,12 @@ foreach(INDEX RANGE ${RESPONDER_MAX_INDEX})
     set(KEYS_H_CONTENT "${KEYS_H_CONTENT}#define LIBSPDM_TPM_HANDLE_RESPONDER_CERTCHAIN_SLOT_${SLOT_ID} ${CERTCHAIN}\n")
 endforeach()
 
+set(KEYS_H_CONTENT "${KEYS_H_CONTENT}\n/* TPM IAK (restricted, TPM2_Quote only, never an SPDM signing key) */\n")
+set(KEYS_H_CONTENT "${KEYS_H_CONTENT}#define LIBSPDM_TPM_IAK_SLOT_ID ${LIBSPDM_TPM_IAK_SLOT_ID}\n")
+set(KEYS_H_CONTENT "${KEYS_H_CONTENT}#define LIBSPDM_TPM_HANDLE_IAK \"handle:${LIBSPDM_TPM_IAK_HANDLE}\"\n")
+set(KEYS_H_CONTENT "${KEYS_H_CONTENT}#define LIBSPDM_TPM_HANDLE_IAK_CERTCHAIN ${LIBSPDM_TPM_IAK_CERTCHAIN}\n")
+set(KEYS_H_CONTENT "${KEYS_H_CONTENT}#define LIBSPDM_TPM_HANDLE_ROOT_CERT ${LIBSPDM_TPM_ROOT_CERT}\n")
+
 # Write the generated keys.h file
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/keys.h "${KEYS_H_CONTENT}")
 
@@ -167,7 +192,7 @@ target_sources(spdm_device_secret_lib_tpm
         ../spdm_device_secret_lib_sample/endpointinfo.c
         ../spdm_device_secret_lib_sample/event.c
         ../spdm_device_secret_lib_sample/key_ex.c
-        ../spdm_device_secret_lib_sample/key_pair.c
+        key_pair.c
         meas.c
         lib.c
         ../spdm_device_secret_lib_sample/psk.c

@@ -19,6 +19,13 @@
 #include "internal/libspdm_device_secret_lib.h"
 #include "library/spdm_crypt_ext_lib.h"
 #include "internal/libspdm_common_lib.h"
+#include "keys.h"
+#include "library/spdm_tpm_quote_opaque.h"
+#include "library/spdm_tpm_pcr.h"
+
+/* The TPM profile extends the generic four-block sample to PCR 0..15. */
+#undef LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER
+#define LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER LIBSPDM_TPM_PCR_COUNT
 
 #if (LIBSPDM_ENABLE_CAPABILITY_MEL_CAP) || (LIBSPDM_ENABLE_CAPABILITY_MEAS_CAP)
 
@@ -91,6 +98,132 @@ void libspdm_generate_mel(uint32_t measurement_hash_algo)
 #endif /*(LIBSPDM_ENABLE_CAPABILITY_MEAS_CAP) || (LIBSPDM_ENABLE_CAPABILITY_MEL_CAP)*/
 
 #if LIBSPDM_ENABLE_CAPABILITY_MEAS_CAP
+static uint8_t libspdm_pcr_measurement_value_type(uint8_t measurements_index)
+{
+    /* PFP defines PCR roles; these DMTF categories are this project's profile. */
+    static const uint8_t types[LIBSPDM_TPM_PCR_COUNT] = {
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_IMMUTABLE_ROM, /* PCR 0 */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_HARDWARE_CONFIGURATION, /* PCR 1 */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_MUTABLE_FIRMWARE, /* PCR 2 */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_FIRMWARE_CONFIGURATION, /* PCR 3 */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_MUTABLE_FIRMWARE, /* PCR 4 */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_FIRMWARE_CONFIGURATION, /* PCR 5 */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL, /* PCR 6: vendor */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_FIRMWARE_CONFIGURATION, /* PCR 7 */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL, /* PCR 8..15: OS */
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL,
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL,
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL,
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL,
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL,
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL,
+        SPDM_MEASUREMENT_BLOCK_MEASUREMENT_TYPE_INFORMATIONAL
+    };
+
+    return types[libspdm_tpm_measurement_pcr_index(measurements_index)];
+}
+
+#define LIBSPDM_TPM_COLLECT_RETRIES 3
+#define LIBSPDM_TPM_QUOTE_OPAQUE_MAX 4096
+
+/* Quote OpaqueData of the current signed GET_MEASUREMENTS, produced by
+ * libspdm_measurement_collection() and returned by libspdm_measurement_opaque_data(). */
+static uint8_t m_libspdm_quote_opaque[LIBSPDM_TPM_QUOTE_OPAQUE_MAX];
+static size_t m_libspdm_quote_opaque_size;
+
+/* PCRs reported by a GET_MEASUREMENTS: all for 0xFF, one for a PCR index, none otherwise. */
+static size_t libspdm_tpm_request_pcrs(uint8_t measurement_index, uint8_t *pcr_indices)
+{
+    uint8_t index;
+
+    if (measurement_index ==
+        SPDM_GET_MEASUREMENTS_REQUEST_MEASUREMENT_OPERATION_ALL_MEASUREMENTS) {
+        for (index = 0; index < LIBSPDM_TPM_PCR_COUNT; index++) {
+            pcr_indices[index] = index;
+        }
+        return LIBSPDM_TPM_PCR_COUNT;
+    }
+    if (libspdm_tpm_measurement_pcr_index(measurement_index) < LIBSPDM_TPM_PCR_COUNT) {
+        pcr_indices[0] = libspdm_tpm_measurement_pcr_index(measurement_index);
+        return 1;
+    }
+    return 0;
+}
+
+/* Read the reported PCRs in one snapshot. For a signed request also TPM2_Quote them with the
+ * restricted IAK (qualifyingData = requester nonce) and check, with the IAK public key, that the
+ * Quote attests exactly the values that go into the measurement record. If a PCR is extended
+ * between the read and the Quote, the check fails and the collection is repeated, so the record
+ * and the Quote always describe the same PCR state. */
+static bool libspdm_tpm_collect_pcrs(uint32_t measurement_hash_algo, const uint8_t *pcr_indices,
+                                     size_t pcr_count, const uint8_t *requester_nonce,
+                                     uint8_t *pcr_values, size_t pcr_values_size)
+{
+    uint8_t quote[LIBSPDM_TPM_QUOTE_OPAQUE_MAX];
+    size_t quote_size;
+    size_t values_size;
+    void *iak_public_key;
+    size_t attempt;
+    bool consistent;
+
+    if (!libspdm_tpm_device_init()) {
+        return false;
+    }
+    for (attempt = 0; attempt < LIBSPDM_TPM_COLLECT_RETRIES; attempt++) {
+        values_size = pcr_values_size;
+        if (!libspdm_tpm_read_pcrs(measurement_hash_algo, pcr_indices, pcr_count,
+                                   pcr_values, &values_size)) {
+            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "failed to read PCRs from TPM\n"));
+            return false;
+        }
+        if (requester_nonce == NULL) {
+            return true;
+        }
+
+        quote_size = sizeof(quote);
+        if (!libspdm_tpm_quote(LIBSPDM_TPM_HANDLE_IAK, measurement_hash_algo, pcr_indices,
+                               pcr_count, requester_nonce, SPDM_NONCE_SIZE, quote, &quote_size)) {
+            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "TPM2_Quote with IAK %s failed\n",
+                           LIBSPDM_TPM_HANDLE_IAK));
+            return false;
+        }
+        if (!libspdm_tpm_get_pub_key_handle(LIBSPDM_TPM_HANDLE_IAK, &iak_public_key)) {
+            return false;
+        }
+        consistent = libspdm_tpm_verify_quote_pcrs(iak_public_key, quote, quote_size,
+                                                   requester_nonce, SPDM_NONCE_SIZE,
+                                                   measurement_hash_algo, pcr_indices, pcr_count,
+                                                   pcr_values, values_size);
+        libspdm_ec_free(iak_public_key);
+        if (consistent) {
+            m_libspdm_quote_opaque_size = sizeof(m_libspdm_quote_opaque);
+            return libspdm_tpm_quote_opaque_encode(LIBSPDM_TPM_IAK_SLOT_ID, quote, quote_size,
+                                                   m_libspdm_quote_opaque,
+                                                   &m_libspdm_quote_opaque_size);
+        }
+        LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO, "PCRs changed during TPM2_Quote, collect again\n"));
+    }
+    LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "no consistent PCR snapshot for TPM2_Quote\n"));
+    return false;
+}
+
+static size_t libspdm_fill_pcr_block(uint8_t measurements_index, size_t hash_size,
+                                     const uint8_t *pcr_value,
+                                     spdm_measurement_block_dmtf_t *measurement_block)
+{
+    measurement_block->measurement_block_common_header.index = measurements_index;
+    measurement_block->measurement_block_common_header.measurement_specification =
+        SPDM_MEASUREMENT_SPECIFICATION_DMTF;
+    measurement_block->measurement_block_dmtf_header.dmtf_spec_measurement_value_type =
+        libspdm_pcr_measurement_value_type(measurements_index);
+    measurement_block->measurement_block_dmtf_header.dmtf_spec_measurement_value_size =
+        (uint16_t)hash_size;
+    measurement_block->measurement_block_common_header.measurement_size =
+        (uint16_t)(sizeof(spdm_measurement_block_dmtf_header_t) + hash_size);
+    libspdm_copy_mem(measurement_block + 1, hash_size, pcr_value, hash_size);
+    return sizeof(spdm_measurement_block_dmtf_t) + hash_size;
+}
+
 /**
  * Fill image hash measurement block.
  *
@@ -104,8 +237,9 @@ size_t libspdm_fill_measurement_image_hash_block (
     )
 {
     size_t hash_size;
-    void *buffer = NULL;
-    size_t buffer_size = 0;
+    uint8_t pcr_index;
+    uint8_t pcr_value[LIBSPDM_MAX_HASH_SIZE];
+    size_t pcr_value_size;
 
     hash_size = libspdm_get_measurement_hash_size(measurement_hash_algo);
 
@@ -114,41 +248,19 @@ size_t libspdm_fill_measurement_image_hash_block (
         return 0;
     }
 
-    if (measurements_index == 0) {
+    pcr_index = libspdm_tpm_measurement_pcr_index(measurements_index);
+    if (pcr_index >= LIBSPDM_TPM_PCR_COUNT) {
         return 0;
     }
 
-    measurement_block->measurement_block_common_header
-    .index = measurements_index;
-    measurement_block->measurement_block_common_header
-    .measurement_specification =
-        SPDM_MEASUREMENT_SPECIFICATION_DMTF;
-
-    measurement_block->measurement_block_dmtf_header
-    .dmtf_spec_measurement_value_type =
-        (measurements_index - 1);
-    measurement_block->measurement_block_dmtf_header
-    .dmtf_spec_measurement_value_size =
-        (uint16_t)hash_size;
-
-    measurement_block->measurement_block_common_header
-    .measurement_size =
-        (uint16_t)(sizeof(spdm_measurement_block_dmtf_header_t) +
-                   (uint16_t)hash_size);
-
-    buffer = (uint8_t*)(measurement_block + 1);
-    buffer_size = hash_size;
-    if (!libspdm_tpm_read_pcr(measurement_hash_algo, (uint32_t)(measurements_index - 1), buffer, &buffer_size)) {
+    pcr_value_size = sizeof(pcr_value);
+    if (!libspdm_tpm_read_pcrs(measurement_hash_algo, &pcr_index, 1, pcr_value, &pcr_value_size) ||
+        (pcr_value_size != hash_size)) {
         LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "failed to read pcr from TPM"));
         return 0;
     }
 
-    if (buffer_size != hash_size) {
-        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "hash_size (%d) != buffer_size (%d)\n", (int)hash_size, (int)buffer_size));
-        return 0;
-    }
-
-    return sizeof(spdm_measurement_block_dmtf_t) + hash_size;
+    return libspdm_fill_pcr_block(measurements_index, hash_size, pcr_value, measurement_block);
 }
 
 /**
@@ -396,6 +508,9 @@ libspdm_return_t libspdm_measurement_collection(
     size_t total_size_needed;
     bool use_bit_stream;
     size_t measurement_block_size;
+    uint8_t pcr_indices[LIBSPDM_TPM_PCR_COUNT];
+    uint8_t pcr_values[LIBSPDM_TPM_PCR_COUNT * LIBSPDM_MAX_HASH_SIZE];
+    size_t pcr_count;
 
     if ((measurement_specification != SPDM_MEASUREMENT_SPECIFICATION_DMTF) ||
         (measurement_hash_algo == 0)) {
@@ -414,6 +529,9 @@ libspdm_return_t libspdm_measurement_collection(
 
     hash_size = libspdm_get_measurement_hash_size(measurement_hash_algo);
     LIBSPDM_ASSERT(hash_size != 0);
+
+    /* A Quote belongs to exactly one signed GET_MEASUREMENTS. */
+    m_libspdm_quote_opaque_size = 0;
 
     use_bit_stream = false;
     if ((measurement_hash_algo == SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_RAW_BIT_STREAM_ONLY) ||
@@ -460,19 +578,24 @@ libspdm_return_t libspdm_measurement_collection(
             return LIBSPDM_STATUS_BUFFER_TOO_SMALL;
         }
 
+        if (use_bit_stream) {
+            return LIBSPDM_STATUS_MEAS_INTERNAL_ERROR;
+        }
+        pcr_count = libspdm_tpm_request_pcrs(measurements_index, pcr_indices);
+        if (!libspdm_tpm_collect_pcrs(measurement_hash_algo, pcr_indices, pcr_count,
+                                      requester_nonce, pcr_values, pcr_count * hash_size)) {
+            return LIBSPDM_STATUS_MEAS_INTERNAL_ERROR;
+        }
+
         *measurements_size = total_size_needed;
         *measurements_count = LIBSPDM_MEASUREMENT_BLOCK_NUMBER;
         measurement_block = measurements;
 
-        /* The first HASH_NUMBER blocks may be hash values or raw bitstream*/
-        for (index = 1; index <= LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER; index++) {
-            measurement_block_size = libspdm_fill_measurement_image_hash_block (use_bit_stream,
-                                                                                measurement_hash_algo,
-                                                                                index,
-                                                                                measurement_block);
-            if (measurement_block_size == 0) {
-                return LIBSPDM_STATUS_MEAS_INTERNAL_ERROR;
-            }
+        /* PCR 0..15 from the snapshot the Quote attests */
+        for (index = 0; index < LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER; index++) {
+            measurement_block_size = libspdm_fill_pcr_block(
+                libspdm_tpm_pcr_measurement_index(index), hash_size,
+                pcr_values + index * hash_size, measurement_block);
             measurement_block = (void *)((uint8_t *)measurement_block + measurement_block_size);
         }
         /* Next one - SVN is always raw bitstream data.*/
@@ -500,7 +623,7 @@ libspdm_return_t libspdm_measurement_collection(
         goto successful_return;
     } else {
         /* One Index */
-        if (measurements_index <= LIBSPDM_MEASUREMENT_BLOCK_HASH_NUMBER) {
+        if (libspdm_tpm_measurement_pcr_index(measurements_index) < LIBSPDM_TPM_PCR_COUNT) {
             if (!use_bit_stream) {
                 total_size_needed =
                     sizeof(spdm_measurement_block_dmtf_t) +
@@ -515,17 +638,20 @@ libspdm_return_t libspdm_measurement_collection(
                 return LIBSPDM_STATUS_BUFFER_TOO_SMALL;
             }
 
+            if (use_bit_stream) {
+                return LIBSPDM_STATUS_MEAS_INTERNAL_ERROR;
+            }
+            pcr_count = libspdm_tpm_request_pcrs(measurements_index, pcr_indices);
+            if (!libspdm_tpm_collect_pcrs(measurement_hash_algo, pcr_indices, pcr_count,
+                                          requester_nonce, pcr_values, pcr_count * hash_size)) {
+                return LIBSPDM_STATUS_MEAS_INTERNAL_ERROR;
+            }
+
             *measurements_count = 1;
             *measurements_size = total_size_needed;
 
             measurement_block = measurements;
-            measurement_block_size = libspdm_fill_measurement_image_hash_block (use_bit_stream,
-                                                                                measurement_hash_algo,
-                                                                                measurements_index,
-                                                                                measurement_block);
-            if (measurement_block_size == 0) {
-                return LIBSPDM_STATUS_MEAS_INTERNAL_ERROR;
-            }
+            libspdm_fill_pcr_block(measurements_index, hash_size, pcr_values, measurement_block);
         } else if (measurements_index == LIBSPDM_MEASUREMENT_INDEX_SVN) {
             total_size_needed =
                 sizeof(spdm_measurement_block_dmtf_t) +
@@ -631,10 +757,6 @@ bool libspdm_measurement_opaque_data(
     void *opaque_data,
     size_t *opaque_data_size)
 {
-    size_t index;
-
-    LIBSPDM_ASSERT(libspdm_secret_lib_meas_opaque_data_size <= *opaque_data_size);
-
     if (g_check_measurement_request_context) {
         if ((spdm_version >> SPDM_VERSION_NUMBER_SHIFT_BIT) >= SPDM_MESSAGE_VERSION_13) {
             LIBSPDM_ASSERT(request_context_size == SPDM_REQ_CONTEXT_SIZE);
@@ -645,13 +767,15 @@ bool libspdm_measurement_opaque_data(
         }
     }
 
-    *opaque_data_size = libspdm_secret_lib_meas_opaque_data_size;
-
-    for (index = 0; index < *opaque_data_size; index++)
-    {
-        ((uint8_t *)opaque_data)[index] = (uint8_t)index;
+    /* The TPM2_Quote that libspdm_measurement_collection() produced and checked for this
+     * request (signed GET_MEASUREMENTS reporting PCRs); otherwise no opaque data. */
+    if (m_libspdm_quote_opaque_size > *opaque_data_size) {
+        return false;
     }
-
+    libspdm_copy_mem(opaque_data, *opaque_data_size, m_libspdm_quote_opaque,
+                     m_libspdm_quote_opaque_size);
+    *opaque_data_size = m_libspdm_quote_opaque_size;
+    m_libspdm_quote_opaque_size = 0;
     return true;
 }
 

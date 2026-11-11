@@ -20,6 +20,90 @@
 #include "library/spdm_crypt_ext_lib.h"
 #include "keys.h"
 
+/* TCG "TPM 2.0 Keys for Device Identity and Attestation" sec. 7.3.2: IAK chains in NV
+ * 0x01C90100-0x01C901FF, IDevID chains in 0x01C90200-0x01C902FF. */
+#define LIBSPDM_TPM_TCG_DEVID_NV_FIRST 0x01C90100
+#define LIBSPDM_TPM_TCG_DEVID_NV_LAST 0x01C902FF
+#define LIBSPDM_TPM_TCG_DEVID_MAX_CERTS 16
+
+static bool is_tcg_devid_chain_index(uint32_t index)
+{
+    return (index >= LIBSPDM_TPM_TCG_DEVID_NV_FIRST) &&
+           (index <= LIBSPDM_TPM_TCG_DEVID_NV_LAST);
+}
+
+/* Read a DER certificate chain ordered Root CA first, leaf last.
+ *
+ * A TCG DevID index holds the DevID chain without the Root CA certificate, leaf at index 0
+ * followed by its issuing intermediates (sec. 7.3.2). The Root CA certificate is read from
+ * LIBSPDM_TPM_HANDLE_ROOT_CERT and the chain is reordered to the SPDM order. Only the first
+ * NV index of a range is read (no overflow into the next index). Any other index holds the
+ * chain in SPDM order already. The returned buffer is freed with free(). */
+static bool read_cert_chain_der(uint32_t index, void **data, size_t *size)
+{
+    void *devid_chain;
+    size_t devid_chain_size;
+    void *root_cert;
+    size_t root_cert_size;
+    const uint8_t *cert[LIBSPDM_TPM_TCG_DEVID_MAX_CERTS];
+    size_t cert_size[LIBSPDM_TPM_TCG_DEVID_MAX_CERTS];
+    size_t cert_count;
+    uint8_t *chain;
+    size_t offset;
+
+    if (!is_tcg_devid_chain_index(index)) {
+        return libspdm_tpm_read_nv(index, data, size);
+    }
+
+    if (!libspdm_tpm_read_nv(index, &devid_chain, &devid_chain_size)) {
+        return false;
+    }
+    if (!libspdm_tpm_read_nv(LIBSPDM_TPM_HANDLE_ROOT_CERT, &root_cert, &root_cert_size)) {
+        free(devid_chain);
+        return false;
+    }
+
+    offset = 0;
+    for (cert_count = 0; cert_count < LIBSPDM_TPM_TCG_DEVID_MAX_CERTS; cert_count++) {
+        if (!libspdm_x509_get_cert_from_cert_chain(devid_chain, devid_chain_size,
+                                                   (int32_t)cert_count, &cert[cert_count],
+                                                   &cert_size[cert_count])) {
+            break;
+        }
+        offset += cert_size[cert_count];
+    }
+    if (offset != devid_chain_size) {
+        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
+                       "TPM DevID certificate chain is invalid or exceeds the certificate limit\n"));
+        free(root_cert);
+        free(devid_chain);
+        return false;
+    }
+
+    chain = malloc(root_cert_size + devid_chain_size);
+    if ((cert_count == 0) || (chain == NULL)) {
+        free(chain);
+        free(root_cert);
+        free(devid_chain);
+        return false;
+    }
+
+    libspdm_copy_mem(chain, root_cert_size + devid_chain_size, root_cert, root_cert_size);
+    offset = root_cert_size;
+    while (cert_count > 0) {
+        cert_count--;
+        libspdm_copy_mem(chain + offset, root_cert_size + devid_chain_size - offset,
+                         cert[cert_count], cert_size[cert_count]);
+        offset += cert_size[cert_count];
+    }
+
+    free(root_cert);
+    free(devid_chain);
+    *data = chain;
+    *size = offset;
+    return true;
+}
+
 static bool get_root_certificate_from_chain(uint32_t chain_index, uint32_t base_hash_algo,
                                             uint32_t base_asym_algo, void **data,
                                             size_t *size, void **hash, size_t *hash_size)
@@ -53,7 +137,7 @@ static bool get_root_certificate_from_chain(uint32_t chain_index, uint32_t base_
         return false;
     }
 
-    result = libspdm_tpm_read_nv(chain_index, &cert_chain_data, &cert_chain_size);
+    result = read_cert_chain_der(chain_index, &cert_chain_data, &cert_chain_size);
     if (!result)
         return false;
 
@@ -117,7 +201,7 @@ static bool get_leaf_certificate_from_chain(uint32_t chain_index, uint32_t base_
     if (!libspdm_tpm_device_init())
         return false;
 
-    result = libspdm_tpm_read_nv(chain_index, &cert_chain_data, &cert_chain_size);
+    result = read_cert_chain_der(chain_index, &cert_chain_data, &cert_chain_size);
     if (!result)
         return false;
 
@@ -168,7 +252,7 @@ static bool get_certificate_chain(uint32_t index, uint32_t base_hash_algo, uint3
         *hash_size = 0;
     }
 
-    if (!libspdm_tpm_read_nv(index, &cert, &cert_size)){
+    if (!read_cert_chain_der(index, &cert, &cert_size)){
         LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "failed to read nv index %d\n", index));
         return false;
     }
@@ -352,11 +436,27 @@ bool libspdm_read_responder_root_public_certificate_slot(uint8_t slot_id,
                                            data, size, hash, hash_size);
 }
 
+/* Certificate chain of the restricted TPM IAK. It is served on LIBSPDM_TPM_IAK_SLOT_ID for
+ * GET_DIGESTS/GET_CERTIFICATE only; that slot is not in LIBSPDM_TPM_RESPONDER_SUPPORTED_SLOT_MASK,
+ * so it never resolves to a signing handle in sign.c. */
+static bool read_responder_iak_certificate_chain(
+    uint32_t base_hash_algo, uint32_t base_asym_algo,
+    void **data, size_t *size, void **hash, size_t *hash_size)
+{
+    return get_certificate_chain(LIBSPDM_TPM_HANDLE_IAK_CERTCHAIN, base_hash_algo,
+                                 base_asym_algo, data, size, hash, hash_size, false, true);
+}
+
 bool libspdm_read_responder_public_certificate_chain_per_slot(
     uint8_t slot_id, uint32_t base_hash_algo, uint32_t base_asym_algo,
     void **data, size_t *size, void **hash, size_t *hash_size)
 {
     uint32_t chain_index;
+
+    if (slot_id == LIBSPDM_TPM_IAK_SLOT_ID) {
+        return read_responder_iak_certificate_chain(base_hash_algo, base_asym_algo,
+                                                    data, size, hash, hash_size);
+    }
 
     if ((slot_id >= SPDM_MAX_SLOT_COUNT) ||
         ((LIBSPDM_TPM_RESPONDER_SUPPORTED_SLOT_MASK & (1u << slot_id)) == 0)) {
